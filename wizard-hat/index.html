@@ -23,9 +23,9 @@ const CONFIG = {
   hatColor: "#512EAB",                // Amethyst
   bandColor: "#56E2E1",               // Turquoise
   patchColors: ["#FFCE00", "#DF41CF", "#56E2E1", "#C1BFFF"],   // Amber, Fuchsia, Turquoise, Light Purple
-  hatScale: 1.5,
-  hatHeight: 2.0,
-  droop: 1.5,                         // how far the tip bends over (0 = straight up)
+  hatScale: 1.0,
+  hatHeight: 1.0,
+  droop: 1.0,                         // how far the tip bends over (0 = straight up)
   droopSide: -1,                      // -1 = tip falls to the hat's left, 1 = right
   charm: true,                        // little brass star hanging from the tip
   sparkles: true,                     // a few drifting sparkles
@@ -33,11 +33,16 @@ const CONFIG = {
   // ---- on / off ----
   startOn: true,                      // hat appears (in a puff of smoke) as soon as it finds your face
   blinkToggle: 3,                     // blink this many times quickly to poof the hat on/off (0 = off)
-  blinkWindow: 1.8,                   // ...within this many seconds
+  blinkWindow: 1.3,                   // ...within this many seconds
+
+  // ---- eyebrow raise: the hat stands up tall until your brows come down ----
+  browStand: true,
+  browThreshold: 0.22,                // how far above your resting brows counts as "raised" (lower = more sensitive)
+  standHeight: 1.15,                  // how much taller it stretches when standing (1 = no stretch)
 
   // ---- physics ----
   floppiness: 0.8,
-  weight: 0.6,                        // heavier = slower and calmer
+  weight: 1.0,                        // heavier = slower and calmer
   gravity: 1.0
 };
 const FORCE_DEMO = false;
@@ -125,6 +130,7 @@ const FORCE_DEMO = false;
       <div class="btns toggles">
         <button id="bCharm" class="on">Charm</button>
         <button id="bSpark" class="on">Sparkles</button>
+        <button id="bBrow">Brows up</button>
       </div>
     </div>
   </div>
@@ -359,7 +365,9 @@ function setHatColor(hex) {
    ===================================================================== */
 const N = 10, RINGS = 96, SEG = 96;
 let autoScale = 1;                     // set from your face size when tracking
-function dims() { const s = CONFIG.hatScale * autoScale; return { baseR: 9.6 * s, height: 33 * s * CONFIG.hatHeight, brimR: 19 * s, seg: 33 * s * CONFIG.hatHeight / (N - 1) }; }
+const stand = { v: 0, vel: 0, target: 0 };    // 0 = normal droop, 1 = standing tall
+function dims() { const s = CONFIG.hatScale * autoScale, grow = 1 + (CONFIG.standHeight - 1) * Math.max(0, stand.v);
+  return { baseR: 9.6 * s, height: 33 * s * CONFIG.hatHeight * grow, brimR: 19 * s, seg: 33 * s * CONFIG.hatHeight * grow / (N - 1) }; }
 function coneRadius(u) {
   const d = dims();
   return Math.max(.22, d.baseR * Math.pow(1 - u, 1.02) * (1 + .05 * Math.sin(Math.min(1, u * 1.6) * Math.PI)) + .25 * Math.exp(-u / .03));
@@ -502,7 +510,7 @@ const motion = { pPrev: null, qPrev: null, vel: v3(), acc: v3(), w: v3(), alpha:
 const headUp = () => v3(0, 1, 0).applyQuaternion(headQuat);
 const bendLocal = () => v3(CONFIG.droopSide * .85, 0, -.55).normalize();
 const bendDir = () => bendLocal().applyQuaternion(hatQuat);
-const restBend = i => CONFIG.droop * .42 * Math.pow(i / (N - 1), 1.5);
+const restBend = i => CONFIG.droop * .42 * Math.pow(i / (N - 1), 1.5) * (1 - Math.max(-.25, Math.min(1.1, stand.v)));
 function rotTowards(dir, toward, ang) { const ax = v3().crossVectors(dir, toward); if (ax.lengthSq() < 1e-8) return dir.clone(); return dir.clone().applyAxisAngle(ax.normalize(), ang); }
 function restLocal() {     // the hat's resting spine, in head space (relative to the anchor)
   const d = dims(), b = bendLocal(), out = [v3()]; let dir = v3(0, 1, 0), p = v3();
@@ -530,6 +538,9 @@ function measureMotion(dt) {
 }
 
 function stepPhysics(dt) {
+  // stand-up spring: a little overshoot and wobble, then holds
+  const sw = 7.5, sz = .5;
+  stand.vel += (sw * sw * (stand.target - stand.v) - 2 * sz * sw * stand.vel) * dt; stand.v += stand.vel * dt;
   const wt = CONFIG.weight, flop = CONFIG.floppiness;
   const w1 = 5.2 / Math.sqrt(wt) * (1.15 - .15 * flop), z1 = .55 + .12 * wt;     // whole-hat sway: slow, well damped
   const w2 = 8.5 / Math.sqrt(wt) * (1.15 - .15 * flop), z2 = .45 + .1 * wt;      // tip: a little quicker, follows behind
@@ -728,7 +739,7 @@ function demoBounds() {
   const halfH = demo.camDist * Math.tan(T.MathUtils.degToRad(camera.fov / 2)), halfW = halfH * camera.aspect;
   const pr = document.getElementById('panel').getBoundingClientRect(), r = canvas.getBoundingClientRect(), wide = r.width >= 760;
   const bottomFrac = wide ? 1 : Math.min(1, (pr.top - r.top) / r.height), rightFrac = wide ? (pr.left - r.left) / r.width : 1;
-  return { x0: -halfW + 22, x1: -halfW + rightFrac * 2 * halfW - 24, y0: -halfH + (1 - bottomFrac) * 2 * halfH + 30, y1: halfH - 46 * CONFIG.hatHeight - 6 };
+  return { x0: -halfW + 22, x1: -halfW + rightFrac * 2 * halfW - 24, y0: -halfH + (1 - bottomFrac) * 2 * halfH + 30, y1: halfH - 46 * CONFIG.hatHeight * (1 + (CONFIG.standHeight - 1) * stand.target) - 10 };
 }
 function demoPose(dt, t, now) {
   demo.idle += dt; const B = demoBounds();
@@ -801,6 +812,7 @@ async function startTracking() {
 const _m = new T.Matrix4(), _p = v3(), _q = new T.Quaternion(), _s = v3();
 let faceSize = 0;
 const blink = { closed: false, times: [], lastToggle: -1e9, li: -1, ri: -1 };
+const brow = { idx: null, base: null, up: false };
 // landmark (normalized image coords) -> camera-space point at a given depth
 function toCam(l, z) {
   const d = v3(l.x * 2 - 1, -(l.y * 2 - 1), .5).unproject(camera).normalize();
@@ -825,8 +837,21 @@ function trackPose(now) {
   const center = top.clone().addScaledVector(up, -faceSize * .45).addScaledVector(back, faceSize * .45);
   setPose(center, q, now, anchorW);
   if (occ) { occ.scale.set(faceSize * .47, faceSize * .62, faceSize * .5); occ.position.set(0, faceSize * .12, -faceSize * .12); }
-  // triple-blink toggle
   const bs = res.faceBlendshapes && res.faceBlendshapes[0];
+  // eyebrow raise -> stand up (measured against your own resting brows)
+  if (bs && CONFIG.browStand) {
+    const cats = bs.categories;
+    if (!brow.idx) { brow.idx = {}; cats.forEach((c, i) => brow.idx[c.categoryName] = i); }
+    const g = n => (cats[brow.idx[n]] || {}).score || 0;
+    const raw = Math.max(g('browInnerUp'), (g('browOuterUpLeft') + g('browOuterUpRight')) / 2);
+    if (brow.base === null) brow.base = raw;
+    if (!brow.up) brow.base += (Math.min(raw, brow.base + .1) - brow.base) * .02;          // slowly learn your resting brows
+    const lift = raw - brow.base;
+    if (!brow.up && lift > CONFIG.browThreshold) brow.up = true;
+    else if (brow.up && lift < CONFIG.browThreshold * .55) brow.up = false;
+    stand.target = brow.up ? 1 : 0;
+  }
+  // triple-blink toggle
   if (bs && CONFIG.blinkToggle > 0) {
     const cats = bs.categories;
     if (blink.li < 0) { blink.li = cats.findIndex(c => c.categoryName === 'eyeBlinkLeft'); blink.ri = cats.findIndex(c => c.categoryName === 'eyeBlinkRight'); }
@@ -835,7 +860,7 @@ function trackPose(now) {
     else if (blink.closed && v < .3) blink.closed = false;
     blink.times = blink.times.filter(t => now - t < CONFIG.blinkWindow * 1000);
     if (blink.times.length >= CONFIG.blinkToggle && now - blink.lastToggle > 1500) { blink.times = []; blink.lastToggle = now; toggleHat(); }
-    if (DEBUG) setStatus('Tracking · blinks ' + blink.times.length + '/' + CONFIG.blinkToggle + ' · hat ' + (hatOn ? 'on' : 'off'));
+    if (DEBUG) setStatus('Tracking · blinks ' + blink.times.length + '/' + CONFIG.blinkToggle + ' · brows ' + (brow.up ? 'UP' : 'down') + ' · hat ' + (hatOn ? 'on' : 'off'));
   }
 }
 
@@ -985,6 +1010,7 @@ if (DEMO) {
   bind('sHeight', v => CONFIG.hatHeight = v); bind('sWeight', v => CONFIG.weight = v);
   const tog = (id, k) => $(id).onclick = () => { CONFIG[k] = !CONFIG[k]; $(id).classList.toggle('on', CONFIG[k]); };
   tog('bCharm', 'charm'); tog('bSpark', 'sparkles');
+  $('bBrow').onclick = () => { stand.target = stand.target ? 0 : 1; $('bBrow').classList.toggle('on', !!stand.target); $('bBrow').textContent = stand.target ? 'Brows down' : 'Brows up'; };
   document.querySelectorAll('.sw').forEach(b => b.onclick = () => { document.querySelectorAll('.sw').forEach(x => x.classList.remove('on')); b.classList.add('on'); setHatColor(b.dataset.c); });
   $('loading').remove();
 } else if (IS_BACK) {
