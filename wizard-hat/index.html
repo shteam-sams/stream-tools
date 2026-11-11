@@ -13,9 +13,11 @@ const CONFIG = {
   cameraName: "OBS Virtual Camera",   // part of the camera's name is enough
   mirror: false,                      // true if you flipped your camera horizontally in OBS
   camRect: { x: 0, y: 0, w: 1920, h: 1080 },   // where your camera sits on the 1920x1080 canvas
-  smoothing: 0.1,                    // 0..0.9, higher = steadier but laggier
-  sitHeight: 4,                       // nudge the hat up (+) or down (-), in cm
+  smoothing: 0.45,                    // 0..0.9, higher = steadier but laggier
+  sitHeight: 0,                       // nudge the hat up (+) or down (-), in cm
   sitDepth: 0,                        // nudge the hat back (-) or forward (+), in cm
+  fitSize: 1.0,                       // fine-tune the auto size (1 = matched to your face)
+  hideBrimBehindHead: false,          // true = an invisible head shape hides the brim behind your head (can cut the hat if the fit is off)
 
   // ---- look (GACA palette) ----
   hatColor: "#512EAB",                // Amethyst
@@ -27,6 +29,11 @@ const CONFIG = {
   droopSide: -1,                      // -1 = tip falls to the hat's left, 1 = right
   charm: true,                        // little brass star hanging from the tip
   sparkles: true,                     // a few drifting sparkles
+
+  // ---- on / off ----
+  startOn: true,                      // hat appears (in a puff of smoke) as soon as it finds your face
+  blinkToggle: 3,                     // blink this many times quickly to poof the hat on/off (0 = off)
+  blinkWindow: 1.3,                   // ...within this many seconds
 
   // ---- physics ----
   floppiness: 0.8,
@@ -49,11 +56,11 @@ const FORCE_DEMO = false;
   *, *::before, *::after { box-sizing: inherit; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
   #gl { position: absolute; display: block; }
-  #video { position: absolute; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+  #video { position: absolute; left: -10px; top: -10px; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+  #gl { background: transparent !important; }
   #status { position: absolute; left: 20px; top: 20px; font: 600 22px system-ui, sans-serif; color: #fff;
     background: rgba(0,0,0,.6); padding: 10px 16px; border-radius: 8px; display: none; max-width: 900px; }
   body.debug #status { display: block; }
-  body.debug #video { opacity: .4; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; }
 
   body.demo { background: radial-gradient(ellipse at 50% 38%, var(--bg2), var(--bg) 70%); color: var(--text);
     font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif; }
@@ -92,13 +99,14 @@ const FORCE_DEMO = false;
   <div id="loading">Stitching the hat…</div>
   <header>
     <h1>Wizard hat</h1>
-    <p>Drag the head around. Try a shake or a nod.</p>
+    <p>Drag the head around. Tap Poof to make the hat vanish and reappear.</p>
   </header>
   <div id="panel">
     <div class="btns">
       <button class="act" id="bShake">Shake</button>
       <button class="act" id="bNod">Nod</button>
-      <button class="act" id="bLook">Look around</button>
+      <button class="act" id="bLook">Look</button>
+      <button class="act" id="bPoof">Poof</button>
       <button id="bMore" aria-expanded="false">Adjust</button>
     </div>
     <div id="more">
@@ -342,7 +350,8 @@ function setHatColor(hex) {
    HAT GEOMETRY
    ===================================================================== */
 const N = 10, RINGS = 96, SEG = 96;
-function dims() { const s = CONFIG.hatScale; return { baseR: 9.6 * s, height: 33 * s * CONFIG.hatHeight, brimR: 19 * s, seg: 33 * s * CONFIG.hatHeight / (N - 1) }; }
+let autoScale = 1;                     // set from your face size when tracking
+function dims() { const s = CONFIG.hatScale * autoScale; return { baseR: 9.6 * s, height: 33 * s * CONFIG.hatHeight, brimR: 19 * s, seg: 33 * s * CONFIG.hatHeight / (N - 1) }; }
 function coneRadius(u) {
   const d = dims();
   return Math.max(.22, d.baseR * Math.pow(1 - u, 1.02) * (1 + .05 * Math.sin(Math.min(1, u * 1.6) * Math.PI)) + .25 * Math.exp(-u / .03));
@@ -432,7 +441,7 @@ seed = 31; const motes = Array.from({ length: MOTES }, (_, i) => ({ a: i / MOTES
    HEAD: a sculpted mannequin bust (demo) or an invisible stand-in (overlay)
    ===================================================================== */
 const head = new T.Group(); scene.add(head);
-let anchorLocal = v3(0, 8.9, -.5), torso = null;
+let anchorLocal = v3(0, 8.9, -.5), torso = null, occ = null;
 if (DEMO) {
   const clay = new T.MeshPhysicalMaterial({ color: '#B4B0CF', roughness: .7, sheen: .2, sheenColor: new T.Color('#ffffff'), sheenRoughness: .8, envMapIntensity: .4 });
   // smooth egg head with a natural jaw taper
@@ -453,11 +462,8 @@ if (DEMO) {
   shoulders.castShadow = shoulders.receiveShadow = true; torso.add(shoulders);
   const chest = new T.Mesh(new T.SphereGeometry(1, 64, 48), clay); chest.scale.set(13.5, 10, 7.2); chest.position.set(0, -27, -.6); chest.castShadow = chest.receiveShadow = true; torso.add(chest);
 } else {
-  anchorLocal = v3(0, 9.5, -3.2);
-  const hg = new T.SphereGeometry(1, 48, 32);
-  const occ = new T.Mesh(hg, new T.MeshBasicMaterial({ colorWrite: false })); occ.renderOrder = -1; occ.scale.set(7.6, 10.5, 9.5); occ.position.set(0, 1.5, -4.2); head.add(occ);
-  const catcher = new T.Mesh(hg, new T.ShadowMaterial({ opacity: .28 })); catcher.receiveShadow = true; catcher.renderOrder = 1;
-  catcher.scale.copy(occ.scale); catcher.position.copy(occ.position); head.add(catcher);
+  // invisible: hides only the part of the brim that's behind your head; never covers your face
+  if (CONFIG.hideBrimBehindHead) { occ = new T.Mesh(new T.SphereGeometry(1, 48, 32), new T.MeshBasicMaterial({ colorWrite: false })); occ.renderOrder = -1; head.add(occ); }
 }
 
 /* =====================================================================
@@ -544,7 +550,7 @@ function buildSpine() {
 // the charm: a real damped pendulum hanging from the tip
 const charm = { p: v3(), v: v3(), tipPrev: null, q: new T.Quaternion() };
 function stepCharm(dt, tip, tipVel) {
-  const L = 2.6 * CONFIG.hatScale, g = v3(0, -981 * CONFIG.gravity, 0);
+  const L = 2.6 * CONFIG.hatScale * autoScale, g = v3(0, -981 * CONFIG.gravity, 0);
   const drag = 1.6 + .8 * CONFIG.weight;
   charm.v.addScaledVector(g, dt).multiplyScalar(Math.exp(-drag * dt));
   charm.p.addScaledVector(charm.v, dt);
@@ -624,7 +630,7 @@ function updateMeshes(time) {
   const m = new T.Matrix4(), xAx = v3().crossVectors(tb, out).normalize();
   m.makeBasis(xAx, tb, out); buckle.quaternion.setFromRotationMatrix(m);
 
-  brimPivot.quaternion.copy(hatQuat);
+  brimPivot.quaternion.copy(hatQuat); brimPivot.scale.setScalar(autoScale); buckle.scale.setScalar(autoScale); charmGroup.scale.setScalar(autoScale);
 
   // charm + cord
   const tipW = pts[N - 1], sd = charm.p.clone().sub(tipW), down = sd.clone().normalize();
@@ -636,7 +642,7 @@ function updateMeshes(time) {
   if (charm.q.dot(target) < 0) target.set(-target.x, -target.y, -target.z, -target.w);
   charm.q.slerp(target, .2);
   charmGroup.position.copy(charm.p).addScaledVector(down, .2); charmGroup.quaternion.copy(charm.q);
-  cord.position.copy(tipW).addScaledVector(sd, .5); cord.quaternion.setFromUnitVectors(v3(0, 1, 0), down); cord.scale.set(1, sd.length(), 1);
+  cord.position.copy(tipW).addScaledVector(sd, .5); cord.quaternion.setFromUnitVectors(v3(0, 1, 0), down); cord.scale.set(autoScale, sd.length(), autoScale);
   charmGroup.visible = cord.visible = CONFIG.charm && appear > .5;
 }
 
@@ -671,13 +677,14 @@ function updateSparkles(dt, time) {
    POSE: demo controller or face tracking
    ===================================================================== */
 let poseOk = false, lastSeen = -1e9, appear = 0;
-function setPose(pos, quat, now) {
+const fitAnchor = v3();
+function setPose(pos, quat, now, anchorWorld) {
   const s = DEMO ? 0 : Math.max(0, Math.min(.9, CONFIG.smoothing));
-  if (!poseOk) { headPos.copy(pos); headQuat.copy(quat); }
+  if (!poseOk) { headPos.copy(pos); headQuat.copy(quat); if (anchorWorld) fitAnchor.copy(anchorWorld); }
   headPos.lerp(pos, 1 - s); headQuat.slerp(quat, 1 - s);
   head.position.copy(headPos); head.quaternion.copy(headQuat);
-  const a = anchorLocal.clone(); if (!DEMO) { a.y += CONFIG.sitHeight; a.z += CONFIG.sitDepth; }
-  anchor = a.applyQuaternion(headQuat).add(headPos);
+  if (anchorWorld) { fitAnchor.lerp(anchorWorld, 1 - s); anchor = fitAnchor.clone(); }
+  else anchor = anchorLocal.clone().applyQuaternion(headQuat).add(headPos);
   if (!poseOk) resetChain();
   poseOk = true; lastSeen = now;
 }
@@ -764,20 +771,110 @@ async function startTracking() {
     const { FaceLandmarker, FilesetResolver } = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs');
     const files = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
     const opts = dlg => ({ baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task', delegate: dlg },
-      runningMode: 'VIDEO', numFaces: 1, outputFacialTransformationMatrixes: true });
+      runningMode: 'VIDEO', numFaces: 1, outputFacialTransformationMatrixes: true, outputFaceBlendshapes: true });
     try { landmarker = await FaceLandmarker.createFromOptions(files, opts('GPU')); } catch (e) { landmarker = await FaceLandmarker.createFromOptions(files, opts('CPU')); }
     setStatus('Tracking: ' + (stream.getVideoTracks()[0].label || 'camera'));
   } catch (e) { setStatus('Face tracking unavailable: ' + (e.message || e)); }
 }
 const _m = new T.Matrix4(), _p = v3(), _q = new T.Quaternion(), _s = v3();
+let faceSize = 0;
+const blink = { closed: false, times: [], lastToggle: -1e9, li: -1, ri: -1 };
+// landmark (normalized image coords) -> camera-space point at a given depth
+function toCam(l, z) {
+  const d = v3(l.x * 2 - 1, -(l.y * 2 - 1), .5).unproject(camera).normalize();
+  return d.multiplyScalar(z / d.z);
+}
 function trackPose(now) {
   if (!landmarker || video.readyState < 2 || video.currentTime === lastVideoTime) return;
   lastVideoTime = video.currentTime;
-  const res = landmarker.detectForVideo(video, now), mats = res.facialTransformationMatrixes;
-  if (mats && mats.length) {
-    _m.fromArray(mats[0].data); _m.decompose(_p, _q, _s); setPose(_p.clone(), _q.clone(), now);
-    if (video.videoWidth) { const a = video.videoWidth / video.videoHeight; if (Math.abs(camera.aspect - a) > .001) { camera.aspect = a; camera.updateProjectionMatrix(); } }
+  if (video.videoWidth) { const a = video.videoWidth / video.videoHeight; if (Math.abs(camera.aspect - a) > .001) { camera.aspect = a; camera.updateProjectionMatrix(); } }
+  const res = landmarker.detectForVideo(video, now), mats = res.facialTransformationMatrixes, lms = res.faceLandmarks;
+  if (!(mats && mats.length && lms && lms.length)) return;
+  _m.fromArray(mats[0].data); _m.decompose(_p, _q, _s);
+  const lm = lms[0], z = Math.min(-5, _p.z);
+  // measure YOUR face: forehead top (10), chin (152), cheek edges (234, 454)
+  const top = toCam(lm[10], z), chin = toCam(lm[152], z), cl = toCam(lm[234], z), cr = toCam(lm[454], z);
+  const size = Math.max(cl.distanceTo(cr), top.distanceTo(chin) * .8);     // robust when you turn or tilt
+  faceSize = faceSize ? faceSize + (size - faceSize) * .12 : size;
+  autoScale = faceSize / 14.5 * CONFIG.fitSize;
+  const q = _q.clone(), up = v3(0, 1, 0).applyQuaternion(q), back = v3(0, 0, -1).applyQuaternion(q);
+  // the crown of the head sits a little above and well behind the top of the forehead
+  const anchorW = top.clone().addScaledVector(up, faceSize * .1 + CONFIG.sitHeight).addScaledVector(back, faceSize * .42 - CONFIG.sitDepth);
+  const center = top.clone().addScaledVector(up, -faceSize * .45).addScaledVector(back, faceSize * .45);
+  setPose(center, q, now, anchorW);
+  if (occ) { occ.scale.set(faceSize * .47, faceSize * .62, faceSize * .5); occ.position.set(0, faceSize * .12, -faceSize * .12); }
+  // triple-blink toggle
+  const bs = res.faceBlendshapes && res.faceBlendshapes[0];
+  if (bs && CONFIG.blinkToggle > 0) {
+    const cats = bs.categories;
+    if (blink.li < 0) { blink.li = cats.findIndex(c => c.categoryName === 'eyeBlinkLeft'); blink.ri = cats.findIndex(c => c.categoryName === 'eyeBlinkRight'); }
+    const v = ((cats[blink.li] || {}).score || 0) * .5 + ((cats[blink.ri] || {}).score || 0) * .5;
+    if (!blink.closed && v > .55) { blink.closed = true; blink.times.push(now); }
+    else if (blink.closed && v < .3) blink.closed = false;
+    blink.times = blink.times.filter(t => now - t < CONFIG.blinkWindow * 1000);
+    if (blink.times.length >= CONFIG.blinkToggle && now - blink.lastToggle > 1500) { blink.times = []; blink.lastToggle = now; toggleHat(); }
+    if (DEBUG) setStatus('Tracking · blinks ' + blink.times.length + '/' + CONFIG.blinkToggle + ' · hat ' + (hatOn ? 'on' : 'off'));
   }
+}
+
+/* =====================================================================
+   POOF: soft smoke puff in GACA purples, plus a sparkle burst
+   ===================================================================== */
+const smokeTex = (() => {
+  const S = 128, cv = document.createElement('canvas'); cv.width = cv.height = S; const c = cv.getContext('2d');
+  seed = 77;
+  for (let i = 0; i < 14; i++) {
+    const x = S / 2 + (rnd() - .5) * S * .38, y = S / 2 + (rnd() - .5) * S * .38, r = S * (.16 + rnd() * .2);
+    const g = c.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, 'rgba(255,255,255,.55)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = g; c.beginPath(); c.arc(x, y, r, 0, 7); c.fill();
+  }
+  const t = new T.CanvasTexture(cv); t.encoding = T.sRGBEncoding; return t;
+})();
+const SMOKE_COLS = ['#EDECF6', '#C1BFFF', '#FFFFFF', '#C1BFFF', '#8F7FD6'];
+const puffs = [];
+for (let i = 0; i < 26; i++) {
+  const sp = new T.Sprite(new T.SpriteMaterial({ map: smokeTex, color: SMOKE_COLS[i % SMOKE_COLS.length], transparent: true, opacity: 0, depthWrite: false }));
+  sp.visible = false; sp.renderOrder = 5; scene.add(sp); puffs.push({ sp, age: 99, life: 1, v: v3(), s0: 1, s1: 1, rot: 0 });
+}
+function poof() {
+  if (!pts.length) return;
+  const d = dims(), c = anchor.clone().addScaledVector(headUp(), d.height * .32);
+  puffs.forEach((p, i) => {
+    const a = Math.random() * Math.PI * 2, e = (Math.random() - .3) * 1.2, sp = 12 + Math.random() * 26;
+    const dir = v3(Math.cos(a) * Math.cos(e), Math.sin(e) + .25, Math.sin(a) * Math.cos(e)).normalize();
+    p.sp.position.copy(c).addScaledVector(dir, Math.random() * 4 * autoScale);
+    p.v.copy(dir).multiplyScalar(sp * autoScale); p.v.y += 8 * autoScale;
+    p.age = -Math.random() * .08; p.life = .9 + Math.random() * .7;
+    p.s0 = (6 + Math.random() * 6) * autoScale; p.s1 = (20 + Math.random() * 16) * autoScale; p.rot = (Math.random() - .5) * 2;
+    p.sp.material.rotation = Math.random() * 6.28; p.sp.visible = true;
+  });
+  for (let k = 0; k < 40 && sparks.length < MAXP - MOTES; k++) {
+    const a = Math.random() * 6.28, e = (Math.random() - .2) * 1.4;
+    sparks.push({ p: c.clone(), v: v3(Math.cos(a) * Math.cos(e), Math.sin(e), Math.sin(a) * Math.cos(e)).multiplyScalar((25 + Math.random() * 30) * autoScale),
+      age: 0, life: .6 + Math.random() * .7, c: SPARK[Math.random() * 5 | 0] });
+  }
+}
+function updatePuffs(dt) {
+  for (const p of puffs) {
+    if (!p.sp.visible) continue;
+    p.age += dt; if (p.age < 0) { p.sp.material.opacity = 0; continue; }
+    const t = p.age / p.life; if (t >= 1) { p.sp.visible = false; continue; }
+    p.sp.position.addScaledVector(p.v, dt); p.v.multiplyScalar(Math.exp(-2.6 * dt)); p.v.y += 6 * autoScale * dt;
+    const s = p.s0 + (p.s1 - p.s0) * (1 - Math.pow(1 - t, 2.5)); p.sp.scale.set(s, s, 1);
+    p.sp.material.rotation += p.rot * dt;
+    p.sp.material.opacity = Math.min(1, p.age / .1) * Math.pow(1 - t, 1.6) * .85;
+  }
+}
+// on/off: the hat shows when it's switched on AND a face is in view
+let hatOn = CONFIG.startOn, shown = false, showT = 0, hideMode = 'quiet', pendingPoof = true;
+function toggleHat() { hatOn = !hatOn; pendingPoof = true; }
+function appearScale(dtSince, showing) {
+  if (showing) {
+    const t = dtSince - .1; if (t <= 0) return 0;                     // smoke covers the first moment
+    const k = Math.min(1, t / .45); return 1 + 1.15 * Math.pow(k - 1, 3) * (k < 1 ? 1 : 0) + .12 * Math.sin(k * Math.PI) * (1 - k);
+  }
+  const len = hideMode === 'poof' ? .16 : .35, k = Math.min(1, dtSince / len);
+  return 1 - k * k;
 }
 
 /* =====================================================================
@@ -812,7 +909,14 @@ function frame(now) {
     camera.position.set(Math.sin(ang) * demo.camDist, 13, Math.cos(ang) * demo.camDist); camera.lookAt(0, 5, 0);
     plane.normal.set(Math.sin(ang), 0, Math.cos(ang)); demoPose(dt, t, now);
   } else trackPose(now);
-  appear += ((now - lastSeen < 600 ? 1 : 0) - appear) * Math.min(1, dt * 7);
+  const want = hatOn && poseOk && now - lastSeen < 600;
+  if (want !== shown) {
+    shown = want; showT = 0;
+    if (pendingPoof || want) { if (poseOk) poof(); hideMode = 'poof'; } else hideMode = 'quiet';
+    pendingPoof = false;
+  } else if (pendingPoof && !want && !hatOn) pendingPoof = false;
+  showT += dt;
+  appear = Math.max(0, appearScale(showT, shown));
   hatRoot.visible = poseOk && appear > .01;
   if (poseOk) {
     measureMotion(dt);
@@ -823,10 +927,10 @@ function frame(now) {
     const tipVel = dt > 0 ? tipNow.clone().sub(from).divideScalar(dt) : v3();
     for (let s = 1; s <= steps; s++) stepCharm(STEP, from.clone().lerp(tipNow, s / steps), tipVel);
     charm.tipPrev = tipNow;
-    hatRoot.position.copy(anchor); hatRoot.scale.setScalar(.2 + .8 * (1 - Math.pow(1 - appear, 3)));
+    hatRoot.position.copy(anchor); hatRoot.scale.setScalar(Math.max(.001, appear));
     updateMeshes(t);
   }
-  updateSparkles(dt, t); placeLights(); renderer.render(scene, camera);
+  updateSparkles(dt, t); updatePuffs(dt); placeLights(); renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
 
@@ -835,6 +939,7 @@ if (DEMO) {
   $('bShake').onclick = () => { demo.action = 'shake'; demo.actionT = 0; demo.idle = 0; };
   $('bNod').onclick = () => { demo.action = 'nod'; demo.actionT = 0; demo.idle = 0; };
   $('bLook').onclick = () => { demo.action = 'look'; demo.actionT = 0; demo.idle = 0; };
+  $('bPoof').onclick = () => toggleHat();
   $('bMore').onclick = () => { const p = $('panel'); p.classList.toggle('open'); $('bMore').setAttribute('aria-expanded', p.classList.contains('open')); };
   const bind = (id, fn) => $(id).addEventListener('input', e => fn(+e.target.value));
   bind('sView', v => demo.view = v); bind('sFlop', v => CONFIG.floppiness = v); bind('sDroop', v => CONFIG.droop = v);
