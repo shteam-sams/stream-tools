@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Wizard hat</title>
+<script>
+/* =====================================================================
+   CONFIG: edit these
+   ===================================================================== */
+const CONFIG = {
+  // ---- face tracking (OBS overlay) ----
+  cameraName: "OBS Virtual Camera",   // part of the camera's name is enough
+  mirror: false,                      // true if you flipped your camera horizontally in OBS
+  camRect: { x: 0, y: 0, w: 1920, h: 1080 },   // where your camera sits on the 1920x1080 canvas
+  smoothing: 0.45,                    // 0..0.9, higher = steadier but laggier
+  sitHeight: 0,                       // nudge the hat up (+) or down (-), in cm
+  sitDepth: 0,                        // nudge the hat back (-) or forward (+), in cm
+
+  // ---- look (GACA palette) ----
+  hatColor: "#512EAB",                // Amethyst
+  bandColor: "#56E2E1",               // Turquoise
+  patchColors: ["#FFCE00", "#DF41CF", "#56E2E1", "#C1BFFF"],   // Amber, Fuchsia, Turquoise, Light Purple
+  hatScale: 1.0,
+  hatHeight: 1.0,
+  droop: 1.0,                         // how far the tip bends over (0 = straight up)
+  droopSide: -1,                      // -1 = tip falls to the hat's left, 1 = right
+  charm: true,                        // little brass star hanging from the tip
+  sparkles: true,                     // a few drifting sparkles
+
+  // ---- physics ----
+  floppiness: 0.8,
+  weight: 1.0,                        // heavier = slower and calmer
+  gravity: 1.0
+};
+const FORCE_DEMO = false;
+</script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
+<style>
+  :root { color-scheme: light;
+    --bg: #EDECF6; --bg2: #FFFFFF; --panel: rgba(255,255,255,.9); --text: #0D004D; --muted: #4A4377;
+    --accent: #512EAB; --line: rgba(13,0,77,.12); --chip: rgba(13,0,77,.06); box-sizing: border-box; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark;
+    --bg: #06001F; --bg2: #1E1150; --panel: rgba(13,0,77,.9); --text: #FFFFFF; --muted: #C1BFFF;
+    --accent: #DF41CF; --line: rgba(255,255,255,.14); --chip: rgba(255,255,255,.08); } }
+  :root[data-theme="dark"] { color-scheme: dark;
+    --bg: #06001F; --bg2: #1E1150; --panel: rgba(13,0,77,.9); --text: #FFFFFF; --muted: #C1BFFF;
+    --accent: #DF41CF; --line: rgba(255,255,255,.14); --chip: rgba(255,255,255,.08); }
+  *, *::before, *::after { box-sizing: inherit; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
+  #gl { position: absolute; display: block; }
+  #video { position: absolute; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+  #status { position: absolute; left: 20px; top: 20px; font: 600 22px system-ui, sans-serif; color: #fff;
+    background: rgba(0,0,0,.6); padding: 10px 16px; border-radius: 8px; display: none; max-width: 900px; }
+  body.debug #status { display: block; }
+  body.debug #video { opacity: .4; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; }
+
+  body.demo { background: radial-gradient(ellipse at 50% 38%, var(--bg2), var(--bg) 70%); color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif; }
+  body.demo #gl { inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+  #ui { display: none; } body.demo #ui { display: block; }
+  #ui header { position: absolute; left: 16px; right: 16px; top: calc(12px + env(safe-area-inset-top, 0px)); pointer-events: none; }
+  #ui h1 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: -.01em; }
+  #ui header p { margin: 4px 0 0; font-size: 14px; color: var(--muted); }
+  #loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 15px; color: var(--muted); pointer-events: none; }
+  #panel { position: absolute; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    max-width: 520px; margin: 0 auto; background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+    padding: 12px 14px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+  @media (min-width: 760px) { #panel { left: auto; right: 20px; bottom: 20px; width: 360px; margin: 0; } }
+  .btns { display: flex; gap: 8px; }
+  button { flex: 1; font: inherit; font-size: 14px; font-weight: 600; padding: 10px 8px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--chip); color: var(--text); cursor: pointer; }
+  button.on { background: var(--accent); color: #fff; border-color: transparent; }
+  button.act { background: #FFCE00; color: #0D004D; border-color: transparent; }
+  #more { display: none; margin-top: 10px; } #panel.open #more { display: block; }
+  .row { display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 10px; margin: 2px 0; }
+  .row label { font-size: 14px; color: var(--muted); }
+  input[type=range] { width: 100%; accent-color: var(--accent); height: 28px; }
+  .swatches { display: flex; gap: 10px; margin: 6px 0 4px; align-items: center; }
+  .swatches span { font-size: 14px; color: var(--muted); width: 86px; }
+  .sw { flex: 0 0 34px; width: 34px; height: 34px; padding: 0; border-radius: 50%; border: 2px solid transparent; }
+  .sw.on { border-color: var(--text); }
+  .toggles { margin-top: 8px; }
+</style>
+</head>
+<body>
+<video id="video" playsinline muted autoplay></video>
+<canvas id="gl"></canvas>
+<div id="status">Starting…</div>
+
+<div id="ui">
+  <div id="loading">Stitching the hat…</div>
+  <header>
+    <h1>Wizard hat</h1>
+    <p>Drag the head around. Try a shake or a nod.</p>
+  </header>
+  <div id="panel">
+    <div class="btns">
+      <button class="act" id="bShake">Shake</button>
+      <button class="act" id="bNod">Nod</button>
+      <button class="act" id="bLook">Look around</button>
+      <button id="bMore" aria-expanded="false">Adjust</button>
+    </div>
+    <div id="more">
+      <div class="swatches"><span>Hat color</span>
+        <button class="sw on" data-c="#512EAB" style="background:#512EAB" aria-label="Amethyst"></button>
+        <button class="sw" data-c="#0D004D" style="background:#0D004D" aria-label="Pearson Purple"></button>
+        <button class="sw" data-c="#DF41CF" style="background:#DF41CF" aria-label="Fuchsia"></button>
+        <button class="sw" data-c="#56E2E1" style="background:#56E2E1" aria-label="Turquoise"></button>
+        <button class="sw" data-c="#C1BFFF" style="background:#C1BFFF" aria-label="Light Purple"></button>
+      </div>
+      <div class="row"><label for="sView">Camera angle</label><input id="sView" type="range" min="-80" max="80" step="1" value="0"></div>
+      <div class="row"><label for="sFlop">Floppiness</label><input id="sFlop" type="range" min="0.2" max="3" step="0.05" value="0.8"></div>
+      <div class="row"><label for="sDroop">Droop</label><input id="sDroop" type="range" min="0" max="2.2" step="0.05" value="1"></div>
+      <div class="row"><label for="sHeight">Height</label><input id="sHeight" type="range" min="0.6" max="1.6" step="0.05" value="1"></div>
+      <div class="row"><label for="sWeight">Weight</label><input id="sWeight" type="range" min="0.3" max="2.5" step="0.05" value="1"></div>
+      <div class="btns toggles">
+        <button id="bCharm" class="on">Charm</button>
+        <button id="bSpark" class="on">Sparkles</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+const params = new URLSearchParams(location.search);
+const DEMO = FORCE_DEMO || params.has('demo');
+const DEBUG = params.has('debug');
+if (DEMO) document.body.classList.add('demo');
+if (DEBUG) document.body.classList.add('debug');
+const statusEl = document.getElementById('status');
+const setStatus = s => { statusEl.textContent = s; console.log('[hat]', s); };
+const T = THREE, v3 = (x = 0, y = 0, z = 0) => new T.Vector3(x, y, z);
+const canvas = document.getElementById('gl'), video = document.getElementById('video');
+
+/* =====================================================================
+   RENDERER + STUDIO LIGHTING
+   ===================================================================== */
+const renderer = new T.WebGLRenderer({ canvas, antialias: true, alpha: true, premultipliedAlpha: true });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+renderer.outputEncoding = T.sRGBEncoding;
+renderer.toneMapping = T.ACESFilmicToneMapping;
+renderer.toneMappingExposure = .9;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = T.VSMShadowMap;
+renderer.setClearColor(0x000000, 0);
+
+const scene = new T.Scene();
+const camera = new T.PerspectiveCamera(DEMO ? 30 : 63, 16 / 9, 1, 10000);
+
+// neutral softbox environment, so metals read as true brass and leather picks up soft highlights
+(function makeEnv() {
+  const s = new T.Scene(), box = new T.BoxGeometry(1, 1, 1);
+  const panel = (hex, k, p, sc) => { const m = new T.Mesh(box, new T.MeshBasicMaterial({ color: new T.Color(hex).multiplyScalar(k) }));
+    m.position.set(...p); m.scale.set(...sc); s.add(m); };
+  s.background = new T.Color('#3a3850');
+  panel('#ffffff', 9, [-5, 4, 5], [4, 4, .2]);      // big key softbox
+  panel('#ffffff', 3, [6, 2, 3], [.2, 5, 5]);       // fill card
+  panel('#ffffff', 5, [0, 9, 0], [8, .2, 8]);       // ceiling
+  panel('#C1BFFF', 2, [0, 2, -8], [10, 4, .2]);     // light purple back wall
+  panel('#2a2440', 1, [0, -6, 0], [20, .2, 20]);    // dark floor
+  const pm = new T.PMREMGenerator(renderer);
+  scene.environment = pm.fromScene(s, .02).texture;
+})();
+const hemi = new T.HemisphereLight('#EDECF6', '#1a1440', .28); scene.add(hemi);
+const key = new T.DirectionalLight('#fff4e8', 2.1); key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048); key.shadow.radius = 7; key.shadow.blurSamples = 16; key.shadow.bias = -.0006;
+Object.assign(key.shadow.camera, { left: -40, right: 40, top: 40, bottom: -40, near: 1, far: 300 });
+scene.add(key, key.target);
+const fill = new T.DirectionalLight('#C1BFFF', .55); scene.add(fill, fill.target);          // Light Purple fill
+const rimA = new T.DirectionalLight('#56E2E1', 1.0); scene.add(rimA, rimA.target);         // Turquoise rim
+const rimB = new T.DirectionalLight('#DF41CF', .7); scene.add(rimB, rimB.target);          // Fuchsia rim
+
+/* =====================================================================
+   TEXTURES: quiet, physically plausible detail
+   ===================================================================== */
+const PERM = new Uint16Array(4096), VALS = new Float32Array(4096);
+{ let sd = 9876; const r = () => (sd = (sd * 16807) % 2147483647) / 2147483647; for (let i = 0; i < 4096; i++) { PERM[i] = r() * 4096 | 0; VALS[i] = r(); } }
+const hash = (i, j, s) => VALS[(PERM[(i + s * 131) & 4095] + j * 61 + s * 17) & 4095];
+function vnoise(x, y, px, s) {
+  const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi, w = k => ((k % px) + px) % px;
+  const a = hash(w(xi), yi, s), b = hash(w(xi + 1), yi, s), c = hash(w(xi), yi + 1, s), d = hash(w(xi + 1), yi + 1, s);
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+function fbm(x, y, px, s, oct) { let t = 0, a = .5, f = 1, n = 0; for (let o = 0; o < oct; o++) { t += vnoise(x * f, y * f, px * f, s + o * 7) * a; n += a; a *= .5; f *= 2; } return t / n; }
+let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+
+function canvasTex(cv, srgb) { const t = new T.CanvasTexture(cv); if (srgb) t.encoding = T.sRGBEncoding; t.wrapS = t.wrapT = T.RepeatWrapping; t.anisotropy = 8; return t; }
+function heightToNormal(h, W, H, k) {
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const c = cv.getContext('2d'), img = c.createImageData(W, H), d = img.data;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x, l = h[y * W + (x - 1 + W) % W], r = h[y * W + (x + 1) % W];
+    const u = h[((y - 1 + H) % H) * W + x], dn = h[((y + 1) % H) * W + x];
+    let nx = (l - r) * k, ny = (dn - u) * k; const nz = 1, L = Math.hypot(nx, ny, nz);
+    d[i * 4] = (nx / L * .5 + .5) * 255; d[i * 4 + 1] = (ny / L * .5 + .5) * 255; d[i * 4 + 2] = (nz / L * .5 + .5) * 255; d[i * 4 + 3] = 255;
+  }
+  c.putImageData(img, 0, 0); return cv;
+}
+function starPath(c, x, y, R, rot, n = 5, inner = .42) {
+  c.beginPath();
+  for (let i = 0; i < n * 2; i++) { const r = i % 2 ? R * inner : R, a = rot + i * Math.PI / n - Math.PI / 2; c.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r); }
+  c.closePath();
+}
+function starShape(R, r) {
+  const s = new T.Shape();
+  for (let i = 0; i < 10; i++) { const rr = i % 2 ? r : R, a = i * Math.PI / 5 + Math.PI / 2; i ? s.lineTo(Math.cos(a) * rr, Math.sin(a) * rr) : s.moveTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+  s.closePath(); return s;
+}
+
+// The leather: soft mottling + fine grain. Patches: a few sewn-on felt stars and a moon.
+const LW = 768;
+const coneGrain = new Float32Array(LW * LW), coneMottle = new Float32Array(LW * LW);
+for (let y = 0; y < LW; y++) for (let x = 0; x < LW; x++) {
+  const u = x / LW, v = y / LW, i = y * LW + x;
+  coneGrain[i] = fbm(u * 110, v * 110, 110, 3, 3);
+  coneMottle[i] = fbm(u * 5, v * 5, 5, 11, 4);
+}
+// patch layout (u around, v up the cone). Placed on the front and sides, kept clear of the back seam.
+const PATCHES = [
+  { u: .74, v: .2, s: 1.0, moon: false, rot: .2 }, { u: .9, v: .33, s: .7, moon: false, rot: -.3 },
+  { u: .62, v: .4, s: .62, moon: false, rot: .5 }, { u: .82, v: .52, s: .5, moon: false, rot: 0 },
+  { u: .52, v: .24, s: .78, moon: true, rot: 0 }, { u: .02, v: .22, s: .66, moon: false, rot: .4 },
+  { u: .45, v: .55, s: .42, moon: false, rot: -.2 }];
+function patchLayer(ctx, mode) {      // mode: 'color' | 'height' | 'rough'
+  PATCHES.forEach((p, k) => {
+    const squeeze = 1 / Math.max(.25, 1 - p.v), R = 46 * p.s * (1 - p.v * .4);
+    const col = CONFIG.patchColors[k % CONFIG.patchColors.length];
+    for (const dx of [-LW, 0, LW]) {
+      ctx.save(); ctx.translate(p.u * LW + dx, (1 - p.v) * LW); ctx.scale(squeeze, 1); ctx.rotate(p.rot);
+      const path = () => { if (p.moon) { ctx.beginPath(); ctx.arc(0, 0, R, 0, 7); ctx.arc(R * .45, -R * .28, R * .82, 0, 7, true); } else starPath(ctx, 0, 0, R, 0); };
+      if (mode === 'color') {
+        const c = new T.Color(col); c.lerp(new T.Color('#6f6c82'), .38); c.multiplyScalar(.66);      // faded, dusty felt
+        path(); ctx.fillStyle = '#' + c.getHexString(); ctx.fill('evenodd');
+        ctx.save(); ctx.clip('evenodd');                                        // soft inner wear
+        const g = ctx.createRadialGradient(-R * .2, -R * .3, R * .1, 0, 0, R * 1.1);
+        g.addColorStop(0, 'rgba(255,255,255,.10)'); g.addColorStop(1, 'rgba(0,0,0,.18)'); ctx.fillStyle = g; ctx.fillRect(-R * 2, -R * 2, R * 4, R * 4);
+        ctx.restore();
+        ctx.setLineDash([5, 5]); ctx.lineWidth = 2.2; ctx.strokeStyle = 'rgba(30,20,50,.55)';   // hand stitching
+        ctx.save(); ctx.scale(.86, .86); path(); ctx.stroke(); ctx.restore(); ctx.setLineDash([]);
+      } else if (mode === 'height') {
+        ctx.filter = 'blur(2.5px)'; path(); ctx.fillStyle = '#fff'; ctx.fill('evenodd'); ctx.filter = 'none';
+        ctx.setLineDash([5, 5]); ctx.lineWidth = 2; ctx.strokeStyle = '#000'; ctx.save(); ctx.scale(.86, .86); path(); ctx.stroke(); ctx.restore(); ctx.setLineDash([]);
+      } else { path(); ctx.fillStyle = 'rgb(225,225,225)'; ctx.fill('evenodd'); }
+      ctx.restore();
+    }
+  });
+}
+const SEAM_U = .25;                    // back of the hat
+function seamLayer(ctx, mode) {
+  const x = SEAM_U * LW;
+  if (mode === 'height') { const g = ctx.createLinearGradient(x - 6, 0, x + 6, 0); g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(.5, 'rgba(0,0,0,.9)'); g.addColorStop(1, 'rgba(0,0,0,0)'); ctx.fillStyle = g; ctx.fillRect(x - 6, 0, 12, LW); }
+  ctx.setLineDash([6, 6]); ctx.lineWidth = 2;
+  for (const s of [-5, 5]) { ctx.strokeStyle = mode === 'color' ? 'rgba(20,10,40,.45)' : '#000'; ctx.beginPath(); ctx.moveTo(x + s, 0); ctx.lineTo(x + s, LW); ctx.stroke(); }
+  ctx.setLineDash([]);
+}
+function leatherColor(hex) {
+  const cv = document.createElement('canvas'); cv.width = cv.height = LW; const c = cv.getContext('2d');
+  const img = c.createImageData(LW, LW), d = img.data;
+  const base = new T.Color(hex), lum = base.r * .3 + base.g * .59 + base.b * .11;
+  base.lerp(new T.Color(lum, lum, lum), .12);
+  const R = base.r * 255, G = base.g * 255, B = base.b * 255;
+  for (let i = 0; i < LW * LW; i++) {
+    const k = .52 + (coneMottle[i] - .5) * .13 + (coneGrain[i] - .5) * .03;
+    d[i * 4] = Math.min(255, R * k); d[i * 4 + 1] = Math.min(255, G * k); d[i * 4 + 2] = Math.min(255, B * k); d[i * 4 + 3] = 255;
+  }
+  c.putImageData(img, 0, 0);
+  seamLayer(c, 'color'); patchLayer(c, 'color');
+  return canvasTex(cv, true);
+}
+function leatherNormal() {
+  const hc = document.createElement('canvas'); hc.width = hc.height = LW; const c = hc.getContext('2d');
+  c.fillStyle = '#808080'; c.fillRect(0, 0, LW, LW); seamLayer(c, 'height'); patchLayer(c, 'height');
+  const extra = c.getImageData(0, 0, LW, LW).data;
+  const h = new Float32Array(LW * LW);
+  for (let i = 0; i < LW * LW; i++) h[i] = coneGrain[i] * .55 + coneMottle[i] * .6 + (extra[i * 4] / 255 - .5) * 1.1;
+  return canvasTex(heightToNormal(h, LW, LW, 3), false);
+}
+function leatherRough() {
+  const cv = document.createElement('canvas'); cv.width = cv.height = LW; const c = cv.getContext('2d');
+  const img = c.createImageData(LW, LW), d = img.data;
+  for (let i = 0; i < LW * LW; i++) { const r = (.6 + coneMottle[i] * .2 + (coneGrain[i] - .5) * .08) * 255; d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = r; d[i * 4 + 3] = 255; }
+  c.putImageData(img, 0, 0); patchLayer(c, 'rough');
+  return canvasTex(cv, false);
+}
+// plain leather for the brim (tiles around)
+function plainLeather(hex) {
+  const W = 512, H = 128, cv = document.createElement('canvas'); cv.width = W; cv.height = H; const c = cv.getContext('2d');
+  const img = c.createImageData(W, H), d = img.data, nh = new Float32Array(W * H);
+  const base = new T.Color(hex), lum = base.r * .3 + base.g * .59 + base.b * .11; base.lerp(new T.Color(lum, lum, lum), .12);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x, g = fbm(x / W * 80, y / H * 20, 80, 21, 3), m = fbm(x / W * 6, y / H * 2, 6, 29, 3);
+    nh[i] = g * .55 + m * .5; const k = .52 + (m - .5) * .12 + (g - .5) * .03;
+    d[i * 4] = Math.min(255, base.r * 255 * k); d[i * 4 + 1] = Math.min(255, base.g * 255 * k); d[i * 4 + 2] = Math.min(255, base.b * 255 * k); d[i * 4 + 3] = 255;
+  }
+  c.putImageData(img, 0, 0);
+  // stitch line near the outer edge of the top (lathe v ~ .44)
+  c.setLineDash([7, 6]); c.lineWidth = 2; c.strokeStyle = 'rgba(20,10,40,.45)'; c.beginPath(); c.moveTo(0, (1 - .44) * H); c.lineTo(W, (1 - .44) * H); c.stroke();
+  return { map: canvasTex(cv, true), normal: canvasTex(heightToNormal(nh, W, H, 2.2), false) };
+}
+// grosgrain ribbon for the band
+function grosgrain(hex) {
+  const W = 1024, H = 64, cv = document.createElement('canvas'); cv.width = W; cv.height = H; const c = cv.getContext('2d');
+  const img = c.createImageData(W, H), d = img.data, nh = new Float32Array(W * H);
+  const base = new T.Color(hex).multiplyScalar(.7);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x, rib = .5 + .5 * Math.sin(x / W * Math.PI * 2 * 360), m = fbm(x / W * 12, y / H, 12, 41, 2);
+    nh[i] = rib * .6 + m * .3; const k = .88 + rib * .1 + (m - .5) * .1;
+    d[i * 4] = Math.min(255, base.r * 255 * k); d[i * 4 + 1] = Math.min(255, base.g * 255 * k); d[i * 4 + 2] = Math.min(255, base.b * 255 * k); d[i * 4 + 3] = 255;
+  }
+  c.putImageData(img, 0, 0);
+  return { map: canvasTex(cv, true), normal: canvasTex(heightToNormal(nh, W, H, 2), false) };
+}
+
+/* =====================================================================
+   MATERIALS
+   ===================================================================== */
+const coneNormal = leatherNormal(), coneRough = leatherRough();
+const coneMat = new T.MeshPhysicalMaterial({ map: leatherColor(CONFIG.hatColor), normalMap: coneNormal, normalScale: new T.Vector2(.45, .45),
+  roughnessMap: coneRough, roughness: 1, metalness: 0, sheen: .12, sheenRoughness: .6, sheenColor: new T.Color('#C1BFFF').multiplyScalar(.35),
+  clearcoat: .08, clearcoatRoughness: .55, envMapIntensity: .45, vertexColors: true, side: T.DoubleSide });
+let brimTex = plainLeather(CONFIG.hatColor);
+brimTex.map.repeat.set(5, 1); brimTex.normal.repeat.set(5, 1);
+const brimMat = new T.MeshPhysicalMaterial({ map: brimTex.map, normalMap: brimTex.normal, normalScale: new T.Vector2(.4, .4),
+  roughness: .72, metalness: 0, sheen: .12, sheenRoughness: .6, sheenColor: new T.Color('#C1BFFF').multiplyScalar(.35),
+  clearcoat: .06, clearcoatRoughness: .6, envMapIntensity: .45, vertexColors: true, side: T.DoubleSide });
+const gg = grosgrain(CONFIG.bandColor); gg.map.repeat.set(1, 1);
+const bandMat = new T.MeshPhysicalMaterial({ map: gg.map, normalMap: gg.normal, normalScale: new T.Vector2(.6, .6), roughness: .78,
+  sheen: .5, sheenRoughness: .5, sheenColor: new T.Color('#B3F2F1').multiplyScalar(.5), envMapIntensity: .4 });
+const brass = new T.MeshStandardMaterial({ color: '#E6B800', metalness: 1, roughness: .42, envMapIntensity: .95 });   // Amber brass
+const cordMat = new T.MeshStandardMaterial({ color: '#0D004D', roughness: .8 });
+function setHatColor(hex) {
+  CONFIG.hatColor = hex;
+  coneMat.map.dispose(); coneMat.map = leatherColor(hex); coneMat.needsUpdate = true;
+  brimMat.map.dispose(); brimTex = plainLeather(hex); brimTex.map.repeat.set(5, 1); brimTex.normal.repeat.set(5, 1);
+  brimMat.map = brimTex.map; brimMat.normalMap = brimTex.normal; brimMat.needsUpdate = true;
+}
+
+/* =====================================================================
+   HAT GEOMETRY
+   ===================================================================== */
+const N = 10, RINGS = 96, SEG = 96;
+function dims() { const s = CONFIG.hatScale; return { baseR: 9.6 * s, height: 33 * s * CONFIG.hatHeight, brimR: 19 * s, seg: 33 * s * CONFIG.hatHeight / (N - 1) }; }
+function coneRadius(u) {
+  const d = dims();
+  return Math.max(.22, d.baseR * Math.pow(1 - u, 1.02) * (1 + .05 * Math.sin(Math.min(1, u * 1.6) * Math.PI)) + .25 * Math.exp(-u / .03));
+}
+function makeTube(rings, withColor) {
+  const g = new T.BufferGeometry(), n = rings * (SEG + 1);
+  g.setAttribute('position', new T.BufferAttribute(new Float32Array(n * 3), 3).setUsage(T.DynamicDrawUsage));
+  if (withColor) g.setAttribute('color', new T.BufferAttribute(new Float32Array(n * 3).fill(1), 3).setUsage(T.DynamicDrawUsage));
+  const uv = new Float32Array(n * 2);
+  for (let i = 0; i < rings; i++) for (let j = 0; j <= SEG; j++) { const k = i * (SEG + 1) + j; uv[k * 2] = j / SEG; uv[k * 2 + 1] = i / (rings - 1); }
+  g.setAttribute('uv', new T.BufferAttribute(uv, 2));
+  const idx = [];
+  for (let i = 0; i < rings - 1; i++) for (let j = 0; j < SEG; j++) { const a = i * (SEG + 1) + j, b = a + 1, c = a + SEG + 1, d = c + 1; idx.push(a, b, c, b, d, c); }
+  g.setIndex(idx); return g;
+}
+const hatRoot = new T.Group(); scene.add(hatRoot);
+const coneGeo = makeTube(RINGS, true);
+const cone = new T.Mesh(coneGeo, coneMat); cone.castShadow = cone.receiveShadow = true; cone.frustumCulled = false; hatRoot.add(cone);
+const BAND_R = 12;
+const bandGeo = makeTube(BAND_R, false);
+const band = new T.Mesh(bandGeo, bandMat); band.castShadow = band.receiveShadow = true; band.frustumCulled = false; hatRoot.add(band);
+
+// rectangular brass buckle with a prong
+const buckle = new T.Group(); hatRoot.add(buckle);
+{
+  const W = 3.2, Hh = 2.5, b = .42, rr = .35;
+  const outer = new T.Shape(); const rect = (s, x0, y0, x1, y1, r) => { s.moveTo(x0 + r, y0); s.lineTo(x1 - r, y0); s.quadraticCurveTo(x1, y0, x1, y0 + r); s.lineTo(x1, y1 - r); s.quadraticCurveTo(x1, y1, x1 - r, y1); s.lineTo(x0 + r, y1); s.quadraticCurveTo(x0, y1, x0, y1 - r); s.lineTo(x0, y0 + r); s.quadraticCurveTo(x0, y0, x0 + r, y0); };
+  rect(outer, -W / 2, -Hh / 2, W / 2, Hh / 2, rr);
+  const hole = new T.Path(); rect(hole, -W / 2 + b, -Hh / 2 + b, W / 2 - b, Hh / 2 - b, rr * .5); outer.holes.push(hole);
+  const frame = new T.Mesh(new T.ExtrudeGeometry(outer, { depth: .22, bevelEnabled: true, bevelThickness: .12, bevelSize: .1, bevelSegments: 3, curveSegments: 8 }), brass);
+  frame.position.z = -.1; frame.castShadow = true; buckle.add(frame);
+  const prong = new T.Mesh(new T.CylinderGeometry(.11, .11, W * .62, 10), brass); prong.rotation.z = Math.PI / 2; prong.position.set(W * .06, 0, .32); prong.castShadow = true; buckle.add(prong);
+  const tail = new T.Mesh(new T.BoxGeometry(2.6, Hh * .72, .18), bandMat); tail.position.set(-W * .55 - .6, 0, .08); tail.castShadow = true; buckle.add(tail);   // strap end tucked through
+}
+
+// brim: thick rounded profile, gently uneven, with baked soft occlusion near the crown
+const brimPivot = new T.Group(); hatRoot.add(brimPivot);
+let brim = null;
+function buildBrim() {
+  const d = dims(), r0 = d.baseR * .84, R = d.brimR, th = .38;
+  const prof = [];
+  for (let i = 0; i <= 14; i++) { const t = i / 14; prof.push(new T.Vector2(r0 + (R - th - r0) * t, -th - .25 * Math.sin(t * Math.PI) * .5)); }        // underside
+  for (let i = 1; i < 10; i++) { const a = -Math.PI / 2 + i / 10 * Math.PI; prof.push(new T.Vector2(R - th + Math.cos(a) * th, Math.sin(a) * th)); }      // rounded edge
+  for (let i = 14; i >= 0; i--) { const t = i / 14; prof.push(new T.Vector2(r0 + (R - th - r0) * t, th + .25 * Math.sin(t * Math.PI) * .5)); }        // top
+  const g = new T.LatheGeometry(prof, 144);
+  const p = g.attributes.position, col = new Float32Array(p.count * 3);
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), z = p.getZ(i), y = p.getY(i), rr = Math.hypot(x, z), a = Math.atan2(z, x);
+    const t = Math.max(0, (rr - d.baseR) / (R - d.baseR));
+    const undulate = (Math.sin(a * 2 + .7) * .75 + Math.sin(a * 3 - 1.2) * .45 + Math.sin(a * 5 + 2.1) * .15) * t * t * 1.1;
+    const droop = -t * t * 1.4 - t * t * 1.6 * Math.max(0, Math.cos(a - 2.3));
+    p.setY(i, y + undulate + droop);
+    // occlusion: darker right next to the crown on top, darker underneath
+    let ao = y > 0 ? .55 + .45 * Math.min(1, Math.max(0, (rr - d.baseR * .95) / 3.5)) : .62;
+    if (rr > R - th * 1.6) ao *= 1.12;                                   // worn, slightly lighter edge
+    col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = ao;
+  }
+  g.setAttribute('color', new T.BufferAttribute(col, 3));
+  g.computeVertexNormals();
+  if (brim) { brimPivot.remove(brim); brim.geometry.dispose(); }
+  brim = new T.Mesh(g, brimMat); brim.castShadow = brim.receiveShadow = true; brimPivot.add(brim);
+}
+buildBrim();
+
+// brass star charm on a dark cord
+const charmGroup = new T.Group(); scene.add(charmGroup);
+const charmStar = new T.Mesh(new T.ExtrudeGeometry(starShape(1.5, .68), { depth: .3, bevelEnabled: true, bevelThickness: .16, bevelSize: .14, bevelSegments: 3 }).center(), brass);
+charmStar.castShadow = true; charmStar.position.y = -1.7; charmGroup.add(charmStar);
+const jump = new T.Mesh(new T.TorusGeometry(.35, .08, 8, 20), brass); jump.position.y = -.2; charmGroup.add(jump);
+const cord = new T.Mesh(new T.CylinderGeometry(.09, .09, 1, 6), cordMat); cord.castShadow = true; scene.add(cord);
+
+// a few drifting sparkles
+const sparkTex = (() => { const cv = document.createElement('canvas'); cv.width = cv.height = 64; const c = cv.getContext('2d');
+  const g = c.createRadialGradient(32, 32, 0, 32, 32, 32); g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(.2, 'rgba(255,255,255,.5)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  c.fillStyle = g; c.fillRect(0, 0, 64, 64); return new T.CanvasTexture(cv); })();
+const MAXP = 160, MOTES = 14;
+const pGeo = new T.BufferGeometry();
+pGeo.setAttribute('position', new T.BufferAttribute(new Float32Array(MAXP * 3), 3).setUsage(T.DynamicDrawUsage));
+pGeo.setAttribute('color', new T.BufferAttribute(new Float32Array(MAXP * 3), 3).setUsage(T.DynamicDrawUsage));
+const points = new T.Points(pGeo, new T.PointsMaterial({ size: 1.1, map: sparkTex, vertexColors: true, transparent: true, depthWrite: false, blending: T.AdditiveBlending }));
+points.frustumCulled = false; scene.add(points);
+const SPARK = ['#FFCE00', '#56E2E1', '#DF41CF', '#FFFFFF', '#C1BFFF'].map(h => new T.Color(h));
+const sparks = [];
+seed = 31; const motes = Array.from({ length: MOTES }, (_, i) => ({ a: i / MOTES * 6.283, r: .8 + rnd() * .6, h: .1 + rnd() * .8, s: .15 + rnd() * .3, c: SPARK[i % 5] }));
+
+/* =====================================================================
+   HEAD: a sculpted mannequin bust (demo) or an invisible stand-in (overlay)
+   ===================================================================== */
+const head = new T.Group(); scene.add(head);
+let anchorLocal = v3(0, 8.9, -.5), torso = null;
+if (DEMO) {
+  const clay = new T.MeshPhysicalMaterial({ color: '#B4B0CF', roughness: .7, sheen: .2, sheenColor: new T.Color('#ffffff'), sheenRoughness: .8, envMapIntensity: .4 });
+  // smooth egg head with a natural jaw taper
+  const hg = new T.SphereGeometry(1, 96, 72), hp = hg.attributes.position;
+  for (let i = 0; i < hp.count; i++) {
+    let x = hp.getX(i), y = hp.getY(i), z = hp.getZ(i);
+    if (y < 0) { const t = Math.pow(-y, 1.6); x *= 1 - .3 * t; z *= 1 - .12 * t; if (z > 0) z *= 1 - .08 * t; }
+    if (y > .2 && z < 0) z *= 1 + .06 * (y - .2);                     // fuller back of the skull
+    hp.setXYZ(i, x * 7.3, y * 10.4 + .6, z * 8.7);
+  }
+  hg.computeVertexNormals();
+  const skull = new T.Mesh(hg, clay); skull.castShadow = skull.receiveShadow = true; head.add(skull);
+  const nose = new T.Mesh(new T.SphereGeometry(1, 32, 24), clay); nose.scale.set(.85, 1.75, 1); nose.position.set(0, -.4, 8.05); nose.rotation.x = -.3; nose.castShadow = nose.receiveShadow = true; head.add(nose);
+  [-1, 1].forEach(s => { const ear = new T.Mesh(new T.SphereGeometry(1, 24, 18), clay); ear.scale.set(.55, 1.9, 1.15); ear.position.set(s * 7.0, .2, -.6); ear.castShadow = ear.receiveShadow = true; head.add(ear); });
+  torso = new T.Group(); scene.add(torso);
+  const neck = new T.Mesh(new T.CylinderGeometry(3.9, 4.6, 12, 48), clay); neck.position.set(0, -12.5, -.8); neck.castShadow = neck.receiveShadow = true; torso.add(neck);
+  const shoulders = new T.Mesh(new T.CapsuleGeometry(5.6, 21, 12, 48), clay); shoulders.rotation.z = Math.PI / 2; shoulders.scale.set(1, 1, .78); shoulders.position.set(0, -20.5, -1.2);
+  shoulders.castShadow = shoulders.receiveShadow = true; torso.add(shoulders);
+  const chest = new T.Mesh(new T.SphereGeometry(1, 64, 48), clay); chest.scale.set(13.5, 10, 7.2); chest.position.set(0, -27, -.6); chest.castShadow = chest.receiveShadow = true; torso.add(chest);
+} else {
+  anchorLocal = v3(0, 9.5, -3.2);
+  const hg = new T.SphereGeometry(1, 48, 32);
+  const occ = new T.Mesh(hg, new T.MeshBasicMaterial({ colorWrite: false })); occ.renderOrder = -1; occ.scale.set(7.6, 10.5, 9.5); occ.position.set(0, 1.5, -4.2); head.add(occ);
+  const catcher = new T.Mesh(hg, new T.ShadowMaterial({ opacity: .28 })); catcher.receiveShadow = true; catcher.renderOrder = 1;
+  catcher.scale.copy(occ.scale); catcher.position.copy(occ.position); head.add(catcher);
+}
+
+/* =====================================================================
+   PHYSICS: the hat is a heavy, damped body. Two sway modes (whole hat + tip)
+   are driven by the head's real motion: acceleration, turning, and tilt
+   against gravity. Integrated at 240 Hz, so it stays smooth.
+   ===================================================================== */
+let pts = [];
+const headPos = v3(), headQuat = new T.Quaternion();
+let anchor = v3();
+const M1 = { x: 0, z: 0, vx: 0, vz: 0 }, M2 = { x: 0, z: 0, vx: 0, vz: 0 };   // sway angles (radians) in head space
+const hatQuat = new T.Quaternion();     // head orientation + the shared base tilt
+const motion = { pPrev: null, qPrev: null, vel: v3(), acc: v3(), w: v3(), alpha: v3() };   // smoothed head motion (head space)
+const headUp = () => v3(0, 1, 0).applyQuaternion(headQuat);
+const bendLocal = () => v3(CONFIG.droopSide * .85, 0, -.55).normalize();
+const bendDir = () => bendLocal().applyQuaternion(hatQuat);
+const restBend = i => CONFIG.droop * .42 * Math.pow(i / (N - 1), 1.5);
+function rotTowards(dir, toward, ang) { const ax = v3().crossVectors(dir, toward); if (ax.lengthSq() < 1e-8) return dir.clone(); return dir.clone().applyAxisAngle(ax.normalize(), ang); }
+function restLocal() {     // the hat's resting spine, in head space (relative to the anchor)
+  const d = dims(), b = bendLocal(), out = [v3()]; let dir = v3(0, 1, 0), p = v3();
+  for (let i = 1; i < N; i++) { dir = rotTowards(dir, b, restBend(i)); p = p.clone().addScaledVector(dir, d.seg); out.push(p); }
+  return out;
+}
+function resetChain() { M1.x = M1.z = M1.vx = M1.vz = 0; M2.x = M2.z = M2.vx = M2.vz = 0; buildSpine(); charm.p = pts[N - 1].clone().add(v3(0, -2.6, 0)); charm.v.set(0, 0, 0); charm.tipPrev = pts[N - 1].clone(); }
+
+// measure the head's motion each frame (smoothed so camera noise can't make the hat twitch)
+function measureMotion(dt) {
+  if (!dt) return;
+  const inv = headQuat.clone().invert();
+  if (motion.pPrev) {
+    const v = anchor.clone().sub(motion.pPrev).divideScalar(dt);
+    const a = v.clone().sub(motion.vel).divideScalar(dt);
+    motion.vel.lerp(v, .35); motion.acc.lerp(a.applyQuaternion(inv), .18);
+    const dq = headQuat.clone().multiply(motion.qPrev.clone().invert());
+    if (dq.w < 0) { dq.x *= -1; dq.y *= -1; dq.z *= -1; dq.w *= -1; }
+    const ang = 2 * Math.acos(Math.min(1, dq.w)), sn = Math.sqrt(Math.max(1e-9, 1 - dq.w * dq.w));
+    const w = v3(dq.x / sn, dq.y / sn, dq.z / sn).multiplyScalar(ang / dt).applyQuaternion(inv);
+    const al = w.clone().sub(motion.w).divideScalar(dt);
+    motion.w.lerp(w, .35); motion.alpha.lerp(al, .15);
+  }
+  motion.pPrev = anchor.clone(); motion.qPrev = headQuat.clone();
+}
+
+function stepPhysics(dt) {
+  const wt = CONFIG.weight, flop = CONFIG.floppiness;
+  const w1 = 5.2 / Math.sqrt(wt) * (1.15 - .15 * flop), z1 = .55 + .12 * wt;     // whole-hat sway: slow, well damped
+  const w2 = 8.5 / Math.sqrt(wt) * (1.15 - .15 * flop), z2 = .45 + .1 * wt;      // tip: a little quicker, follows behind
+  const gain = .0045 * flop, d = dims();
+  // forces in head space (x = right, z = forward)
+  const gL = v3(0, -981 * CONFIG.gravity, 0).applyQuaternion(headQuat.clone().invert());
+  const tipR = restLocal()[N - 1];
+  const tang = v3().crossVectors(motion.alpha, tipR);                // turning makes the tip lag behind
+  const fx = (-motion.acc.x - tang.x * .45 + gL.x * .9) * gain, fz = (-motion.acc.z - tang.z * .45 + gL.z * .9) * gain;
+  const lim = .26;
+  for (const [M, w, z, k] of [[M1, w1, z1, 1], [M2, w2, z2, .8]]) {
+    const ax = -w * w * M.x - 2 * z * w * M.vx + fx * w * w * k, az = -w * w * M.z - 2 * z * w * M.vz + fz * w * w * k;
+    M.vx += ax * dt; M.vz += az * dt; M.x += M.vx * dt; M.z += M.vz * dt;
+    M.x = Math.max(-lim, Math.min(lim, M.x)); M.z = Math.max(-lim, Math.min(lim, M.z));
+  }
+}
+
+const BASE_TILT = .22;                 // how much of the sway tips the whole hat (brim included)
+function baseTiltQuat() {
+  const mag = Math.hypot(M1.x, M1.z) * BASE_TILT;
+  return mag > 1e-6 ? new T.Quaternion().setFromAxisAngle(v3(M1.z, 0, -M1.x).normalize(), mag) : new T.Quaternion();
+}
+function buildSpine() {
+  const d = dims(), b = bendLocal(); pts = [];
+  const tilt = baseTiltQuat();
+  let dir = v3(0, 1, 0), p = v3(); const local = [p.clone()];
+  for (let i = 1; i < N; i++) {
+    const t = i / (N - 1);
+    dir = rotTowards(dir, b, restBend(i));
+    const flex = 1 - BASE_TILT;          // the rest of the sway bends the crown above the base
+    const sx = M1.x * flex * Math.pow(t, 1.1) + M2.x * Math.pow(t, 3), sz = M1.z * flex * Math.pow(t, 1.1) + M2.z * Math.pow(t, 3);
+    const mag = Math.hypot(sx, sz); let dd = dir;
+    if (mag > 1e-5) dd = dir.clone().applyAxisAngle(v3(sz / mag, 0, -sx / mag), mag);
+    p = p.clone().addScaledVector(dd, d.seg); local.push(p);
+  }
+  const full = headQuat.clone().multiply(tilt); hatQuat.copy(full);
+  for (const q of local) pts.push(q.applyQuaternion(full).add(anchor));
+}
+
+// the charm: a real damped pendulum hanging from the tip
+const charm = { p: v3(), v: v3(), tipPrev: null, q: new T.Quaternion() };
+function stepCharm(dt, tip, tipVel) {
+  const L = 2.6 * CONFIG.hatScale, g = v3(0, -981 * CONFIG.gravity, 0);
+  const drag = 1.6 + .8 * CONFIG.weight;
+  charm.v.addScaledVector(g, dt).multiplyScalar(Math.exp(-drag * dt));
+  charm.p.addScaledVector(charm.v, dt);
+  const dv = charm.p.clone().sub(tip), l = dv.length() || 1, n = dv.divideScalar(l);
+  const maxA = 1.0;                                                                    // never swings more than ~57° from hanging straight down
+  const ang = Math.acos(Math.max(-1, Math.min(1, -n.y)));
+  if (ang > maxA) { const hz = v3(n.x, 0, n.z).normalize(); n.copy(hz.multiplyScalar(Math.sin(maxA))).add(v3(0, -Math.cos(maxA), 0)); }
+  charm.p.copy(tip).addScaledVector(n, L);
+  const rel = charm.v.clone().sub(tipVel); charm.v.addScaledVector(n, -rel.dot(n));      // a cord can't stretch
+}
+
+/* =====================================================================
+   MESH UPDATE: sweep the cone along the spine, with soft folds that live
+   where the leather bends, and baked occlusion in vertex colors
+   ===================================================================== */
+const curve = new T.CatmullRomCurve3([], false, 'centripetal');
+const CREASES = [{ u: .36, w: .024, a: .07 }, { u: .47, w: .022, a: .1 }, { u: .57, w: .02, a: .11 }, { u: .66, w: .018, a: .1 }, { u: .75, w: .016, a: .08 }, { u: .83, w: .014, a: .06 }];
+const Pf = [], Tf = [], Nf = [], Bf = [];
+for (let i = 0; i < RINGS; i++) { Pf.push(v3()); Tf.push(v3()); Nf.push(v3()); Bf.push(v3()); }
+const _dir = v3(), _k = v3(), _b = v3();
+function updateMeshes(time) {
+  curve.points = pts.map(p => p.clone().sub(anchor)); curve.updateArcLengths();
+  for (let i = 0; i < RINGS; i++) { const u = i / (RINGS - 1); curve.getPointAt(u, Pf[i]); curve.getTangentAt(u, Tf[i]).normalize(); }
+  const n = v3(1, 0, 0).applyQuaternion(hatQuat); n.addScaledVector(Tf[0], -n.dot(Tf[0])).normalize();
+  for (let i = 0; i < RINGS; i++) { if (i) n.addScaledVector(Tf[i], -n.dot(Tf[i])).normalize(); Nf[i].copy(n); Bf[i].crossVectors(Tf[i], n).normalize(); }
+  const bWorld = bendDir();
+  const pos = coneGeo.attributes.position.array, col = coneGeo.attributes.color.array;
+  for (let i = 0; i < RINGS; i++) {
+    const u = i / (RINGS - 1), r = coneRadius(u);
+    // bend direction at this ring (inside of the curve), and how hard it bends
+    _k.subVectors(Tf[Math.min(RINGS - 1, i + 2)], Tf[Math.max(0, i - 2)]);
+    const kap = _k.length() * 6;
+    _b.copy(bWorld).addScaledVector(Tf[i], -bWorld.dot(Tf[i])).normalize();
+    if (kap > .02) _b.lerp(_k.normalize(), Math.min(1, kap)).normalize();
+    const bendAmt = .55 + Math.min(1.2, kap * 1.6);
+    const lumpFade = Math.min(1, Math.max(0, (u - .1) / .12));
+    for (let j = 0; j <= SEG; j++) {
+      const th = j / SEG * Math.PI * 2;
+      _dir.copy(Nf[i]).multiplyScalar(Math.cos(th)).addScaledVector(Bf[i], Math.sin(th));
+      const inner = Math.max(0, _dir.dot(_b)), side = .25 + .75 * Math.pow(inner, 1.6);
+      let disp = 0;
+      for (let c = 0; c < CREASES.length; c++) {
+        const C = CREASES[c], x = u - C.u - .018 * Math.sin(th * 2 + c * 1.7);
+        const groove = -Math.exp(-(x * x) / (C.w * C.w)) + .38 * Math.exp(-((x + 1.7 * C.w) ** 2) / (1.4 * C.w * C.w)) + .38 * Math.exp(-((x - 1.7 * C.w) ** 2) / (1.4 * C.w * C.w));
+        disp += C.a * groove * side * bendAmt;
+      }
+      const lumps = (.022 * Math.sin(2 * th + u * 3 + .4) + .016 * Math.sin(3 * th - u * 6 + 1.2) + .008 * Math.sin(5 * th + u * 9)) * lumpFade;
+      let dth = Math.abs(th - 5.2); dth = Math.min(dth, 6.283 - dth);
+      const dent = -.06 * Math.exp(-(dth * dth / .25 + (u - .28) ** 2 / .006));
+      const rr = r * (1 + disp + lumps + dent);
+      const k = (i * (SEG + 1) + j) * 3, P = Pf[i];
+      pos[k] = P.x + _dir.x * rr; pos[k + 1] = P.y + _dir.y * rr; pos[k + 2] = P.z + _dir.z * rr;
+      // baked occlusion: valleys darker, ridges a touch lighter, tip slightly darker
+      const shade = 1 + Math.max(-.6, Math.min(.14, (disp + dent) * 5.5)) - u * .08;
+      col[k] = col[k + 1] = col[k + 2] = shade;
+    }
+  }
+  coneGeo.attributes.position.needsUpdate = true; coneGeo.attributes.color.needsUpdate = true; coneGeo.computeVertexNormals();
+
+  // band: grosgrain ribbon with rounded edges
+  const bp = bandGeo.attributes.position.array, v0 = .004, v1 = .085;
+  for (let i = 0; i < BAND_R; i++) {
+    const t = i / (BAND_R - 1), u = v0 + (v1 - v0) * t, fi = Math.round(u * (RINGS - 1)), p = curve.getPointAt(u);
+    const r = coneRadius(u) + .22 + .14 * Math.sqrt(Math.sin(t * Math.PI));
+    for (let j = 0; j <= SEG; j++) {
+      const th = j / SEG * Math.PI * 2; _dir.copy(Nf[fi]).multiplyScalar(Math.cos(th)).addScaledVector(Bf[fi], Math.sin(th));
+      const k = (i * (SEG + 1) + j) * 3; bp[k] = p.x + _dir.x * r; bp[k + 1] = p.y + _dir.y * r; bp[k + 2] = p.z + _dir.z * r;
+    }
+  }
+  bandGeo.attributes.position.needsUpdate = true; bandGeo.computeVertexNormals();
+
+  // buckle: on the band, a little off to the side of the front
+  const ub = (v0 + v1) / 2, pb = curve.getPointAt(ub), tb = curve.getTangentAt(ub).normalize();
+  const front = v3(0, 0, 1).applyQuaternion(hatQuat); front.addScaledVector(tb, -front.dot(tb)).normalize();
+  const out = front.clone().applyAxisAngle(tb, CONFIG.droopSide * .55);
+  buckle.position.copy(pb).addScaledVector(out, coneRadius(ub) + .5);
+  const m = new T.Matrix4(), xAx = v3().crossVectors(tb, out).normalize();
+  m.makeBasis(xAx, tb, out); buckle.quaternion.setFromRotationMatrix(m);
+
+  brimPivot.quaternion.copy(hatQuat);
+
+  // charm + cord
+  const tipW = pts[N - 1], sd = charm.p.clone().sub(tipW), down = sd.clone().normalize();
+  // stable orientation: hang along the cord, face the head's forward direction (no flipping)
+  const cy = down.clone().negate(), cf = v3(0, 0, 1).applyQuaternion(headQuat);
+  let cx = v3().crossVectors(cy, cf); if (cx.lengthSq() < 1e-6) cx = v3(1, 0, 0).applyQuaternion(headQuat); cx.normalize();
+  const cz = v3().crossVectors(cx, cy).normalize();
+  const target = new T.Quaternion().setFromRotationMatrix(new T.Matrix4().makeBasis(cx, cy, cz));
+  if (charm.q.dot(target) < 0) target.set(-target.x, -target.y, -target.z, -target.w);
+  charm.q.slerp(target, .2);
+  charmGroup.position.copy(charm.p).addScaledVector(down, .2); charmGroup.quaternion.copy(charm.q);
+  cord.position.copy(tipW).addScaledVector(sd, .5); cord.quaternion.setFromUnitVectors(v3(0, 1, 0), down); cord.scale.set(1, sd.length(), 1);
+  charmGroup.visible = cord.visible = CONFIG.charm && appear > .5;
+}
+
+let lastTip = null;
+function updateSparkles(dt, time) {
+  const P = pGeo.attributes.position.array, Cc = pGeo.attributes.color.array;
+  if (CONFIG.sparkles && pts.length && appear > .5) {
+    const tip = pts[N - 1];
+    if (lastTip) { const sp = tip.distanceTo(lastTip) / Math.max(dt, 1e-3), want = Math.max(0, sp - 60) * dt * .3;
+      for (let k = 0; k < Math.floor(want + Math.random()) && sparks.length < MAXP - MOTES; k++)
+        sparks.push({ p: tip.clone(), v: v3((Math.random() - .5) * 18, 6 + Math.random() * 12, (Math.random() - .5) * 18), age: 0, life: .5 + Math.random() * .7, c: SPARK[Math.random() * 5 | 0] }); }
+    lastTip = tip.clone();
+  }
+  for (const s of sparks) { s.age += dt; s.p.addScaledVector(s.v, dt); s.v.y -= 10 * dt; }
+  while (sparks.length && sparks[0].age > sparks[0].life) sparks.shift();
+  let n = 0;
+  if (CONFIG.sparkles && pts.length) {
+    const d = dims(), up = headUp(), sx = v3(1, 0, 0).applyQuaternion(headQuat), fz = v3(0, 0, 1).applyQuaternion(headQuat);
+    for (const m of motes) {
+      const a = m.a + time * m.s, y = m.h * d.height * .9, r = (coneRadius(m.h) + 6) * m.r + 2;
+      const p = anchor.clone().addScaledVector(up, y + Math.sin(time * .6 + m.a) * 1.5).addScaledVector(sx, Math.cos(a) * r).addScaledVector(fz, Math.sin(a) * r);
+      const tw = (.25 + .25 * Math.sin(time * 2.4 + m.a * 5)) * appear;
+      P[n * 3] = p.x; P[n * 3 + 1] = p.y; P[n * 3 + 2] = p.z; Cc[n * 3] = m.c.r * tw; Cc[n * 3 + 1] = m.c.g * tw; Cc[n * 3 + 2] = m.c.b * tw; n++;
+    }
+  }
+  for (const s of sparks) { const k = Math.max(0, 1 - s.age / s.life) * .8;
+    P[n * 3] = s.p.x; P[n * 3 + 1] = s.p.y; P[n * 3 + 2] = s.p.z; Cc[n * 3] = s.c.r * k; Cc[n * 3 + 1] = s.c.g * k; Cc[n * 3 + 2] = s.c.b * k; n++; }
+  pGeo.setDrawRange(0, n); pGeo.attributes.position.needsUpdate = true; pGeo.attributes.color.needsUpdate = true;
+}
+
+/* =====================================================================
+   POSE: demo controller or face tracking
+   ===================================================================== */
+let poseOk = false, lastSeen = -1e9, appear = 0;
+function setPose(pos, quat, now) {
+  const s = DEMO ? 0 : Math.max(0, Math.min(.9, CONFIG.smoothing));
+  if (!poseOk) { headPos.copy(pos); headQuat.copy(quat); }
+  headPos.lerp(pos, 1 - s); headQuat.slerp(quat, 1 - s);
+  head.position.copy(headPos); head.quaternion.copy(headQuat);
+  const a = anchorLocal.clone(); if (!DEMO) { a.y += CONFIG.sitHeight; a.z += CONFIG.sitDepth; }
+  anchor = a.applyQuaternion(headQuat).add(headPos);
+  if (!poseOk) resetChain();
+  poseOk = true; lastSeen = now;
+}
+
+const demo = { target: v3(), pos: v3(), vel: v3(), yaw: 0, pitch: 0, roll: 0, vy: 0, vp: 0, vr: 0, action: null, actionT: 0, idle: 0, view: 0, camDist: 120 };
+let dragOffset = null;
+const ray = new T.Raycaster(), plane = new T.Plane(v3(0, 0, 1), 0);
+function pointerWorld(e) { const r = canvas.getBoundingClientRect();
+  ray.setFromCamera({ x: (e.clientX - r.left) / r.width * 2 - 1, y: -(e.clientY - r.top) / r.height * 2 + 1 }, camera);
+  const p = v3(); return ray.ray.intersectPlane(plane, p) ? p : null; }
+if (DEMO) {
+  canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture(e.pointerId); const p = pointerWorld(e); if (p) dragOffset = demo.target.clone().sub(p); demo.idle = 0; });
+  canvas.addEventListener('pointermove', e => { if (!dragOffset) return; const p = pointerWorld(e); if (p) demo.target.copy(p.add(dragOffset)); demo.idle = 0; });
+  const end = () => { dragOffset = null; }; canvas.addEventListener('pointerup', end); canvas.addEventListener('pointercancel', end);
+}
+function spring(x, v, target, dt, w) { const f = 1 + 2 * dt * w, oo = w * w, hoo = dt * oo, hhoo = dt * hoo, det = 1 / (f + hhoo);
+  return [det * (f * x + dt * v + hhoo * target), det * (v + hoo * (target - x))]; }
+function demoBounds() {
+  const halfH = demo.camDist * Math.tan(T.MathUtils.degToRad(camera.fov / 2)), halfW = halfH * camera.aspect;
+  const pr = document.getElementById('panel').getBoundingClientRect(), r = canvas.getBoundingClientRect(), wide = r.width >= 760;
+  const bottomFrac = wide ? 1 : Math.min(1, (pr.top - r.top) / r.height), rightFrac = wide ? (pr.left - r.left) / r.width : 1;
+  return { x0: -halfW + 22, x1: -halfW + rightFrac * 2 * halfW - 24, y0: -halfH + (1 - bottomFrac) * 2 * halfH + 30, y1: halfH - 46 * CONFIG.hatHeight - 6 };
+}
+function demoPose(dt, t, now) {
+  demo.idle += dt; const B = demoBounds();
+  if (!dragOffset && demo.idle > 5) demo.target.set((B.x0 + B.x1) / 2 + Math.sin(t * .4) * (B.x1 - B.x0) * .12, (B.y0 + Math.max(B.y0, B.y1)) / 2, 0);
+  demo.target.x = Math.max(B.x0, Math.min(B.x1, demo.target.x)); demo.target.y = Math.max(B.y0, Math.min(Math.max(B.y0, B.y1), demo.target.y));
+  const before = demo.pos.clone(); demo.pos.lerp(demo.target, Math.min(1, dt * 10));
+  demo.vel.lerp(demo.pos.clone().sub(before).divideScalar(Math.max(dt, 1e-3)), .25);
+  let ty = Math.max(-.6, Math.min(.6, demo.vel.x * .005)), tp = Math.max(-.3, Math.min(.3, -demo.vel.y * .004)), tr = Math.max(-.25, Math.min(.25, -demo.vel.x * .0025));
+  if (!dragOffset && demo.idle > 2) { ty += Math.sin(t * .6) * .22; tp += Math.sin(t * .37) * .06; }
+  if (demo.action) {
+    demo.actionT += dt; const k = demo.actionT;
+    if (demo.action === 'shake') { ty += Math.sin(k * Math.PI * 2 * 1.8) * .45 * Math.max(0, 1 - k / 1.8); if (k > 1.8) demo.action = null; }
+    if (demo.action === 'nod') { tp += Math.sin(k * Math.PI * 2 * 1.7) * .32 * Math.max(0, 1 - k / 1.8); if (k > 1.6) demo.action = null; }
+    if (demo.action === 'look') {
+      const keys = [[0, 0, 0], [.7, .8, 0], [1.6, -.8, 0], [2.4, 0, -.35], [3.1, 0, .3], [3.8, .45, -.12], [4.5, 0, 0]];
+      let a = keys[0], b = keys[keys.length - 1];
+      for (let i = 0; i < keys.length - 1; i++) if (k >= keys[i][0] && k < keys[i + 1][0]) { a = keys[i]; b = keys[i + 1]; break; }
+      const f = b[0] > a[0] ? Math.min(1, (k - a[0]) / (b[0] - a[0])) : 1, e = f * f * (3 - 2 * f);
+      ty += a[1] + (b[1] - a[1]) * e; tp += a[2] + (b[2] - a[2]) * e; if (k > 4.6) demo.action = null;
+    }
+  }
+  const w = demo.action ? 20 : 11;
+  [demo.yaw, demo.vy] = spring(demo.yaw, demo.vy, ty, dt, w); [demo.pitch, demo.vp] = spring(demo.pitch, demo.vp, tp, dt, w); [demo.roll, demo.vr] = spring(demo.roll, demo.vr, tr, dt, 9);
+  setPose(demo.pos, new T.Quaternion().setFromEuler(new T.Euler(demo.pitch, demo.yaw, demo.roll, 'YXZ')), now);
+  torso.position.copy(demo.pos); torso.rotation.set(0, demo.yaw * .2, demo.roll * .25);
+}
+
+let landmarker = null, lastVideoTime = -1;
+async function startTracking() {
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)
+      throw new Error('Camera access is blocked. Load this page from an https:// link, and start OBS with --enable-media-stream --use-fake-ui-for-media-stream.');
+    setStatus('Opening camera…');
+    let stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+    const want = devs.find(d => d.label.toLowerCase().includes(CONFIG.cameraName.toLowerCase()));
+    const cur = stream.getVideoTracks()[0].getSettings().deviceId;
+    if (want && want.deviceId !== cur) { stream.getTracks().forEach(t => t.stop());
+      stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: want.deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }); }
+    else if (!want) console.warn('[hat] "' + CONFIG.cameraName + '" not found, using', devs.map(d => d.label));
+    video.srcObject = stream; await video.play();
+    setStatus('Loading face tracker…');
+    const { FaceLandmarker, FilesetResolver } = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs');
+    const files = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+    const opts = dlg => ({ baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task', delegate: dlg },
+      runningMode: 'VIDEO', numFaces: 1, outputFacialTransformationMatrixes: true });
+    try { landmarker = await FaceLandmarker.createFromOptions(files, opts('GPU')); } catch (e) { landmarker = await FaceLandmarker.createFromOptions(files, opts('CPU')); }
+    setStatus('Tracking: ' + (stream.getVideoTracks()[0].label || 'camera'));
+  } catch (e) { setStatus('Face tracking unavailable: ' + (e.message || e)); }
+}
+const _m = new T.Matrix4(), _p = v3(), _q = new T.Quaternion(), _s = v3();
+function trackPose(now) {
+  if (!landmarker || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  const res = landmarker.detectForVideo(video, now), mats = res.facialTransformationMatrixes;
+  if (mats && mats.length) {
+    _m.fromArray(mats[0].data); _m.decompose(_p, _q, _s); setPose(_p.clone(), _q.clone(), now);
+    if (video.videoWidth) { const a = video.videoWidth / video.videoHeight; if (Math.abs(camera.aspect - a) > .001) { camera.aspect = a; camera.updateProjectionMatrix(); } }
+  }
+}
+
+/* =====================================================================
+   LAYOUT + LOOP
+   ===================================================================== */
+function layout() {
+  if (DEMO) {
+    const r = canvas.getBoundingClientRect(); renderer.setSize(r.width, r.height, false); camera.aspect = r.width / r.height;
+    const tanH = Math.tan(T.MathUtils.degToRad(camera.fov / 2));
+    demo.camDist = Math.max(42 / tanH, 26 / (tanH * camera.aspect)); camera.updateProjectionMatrix();
+  } else {
+    const R = CONFIG.camRect, sx = innerWidth / 1920, sy = innerHeight / 1080;
+    Object.assign(canvas.style, { left: R.x * sx + 'px', top: R.y * sy + 'px', width: R.w * sx + 'px', height: R.h * sy + 'px', transform: CONFIG.mirror ? 'scaleX(-1)' : 'none' });
+    renderer.setSize(R.w * sx, R.h * sy, false); camera.aspect = R.w / R.h; camera.position.set(0, 0, 0); camera.lookAt(0, 0, -1); camera.updateProjectionMatrix();
+  }
+}
+addEventListener('resize', layout); layout();
+function placeLights() {
+  const c = poseOk ? headPos.clone().add(v3(0, 10, 0)) : v3();
+  const view = DEMO ? camera.position.clone().sub(c).setY(0).normalize() : v3(0, 0, 1), right = v3().crossVectors(v3(0, 1, 0), view).normalize();
+  key.position.copy(c).addScaledVector(view, 55).addScaledVector(right, -60).add(v3(0, 75, 0)); key.target.position.copy(c);
+  fill.position.copy(c).addScaledVector(view, 40).addScaledVector(right, 70); fill.target.position.copy(c);
+  rimA.position.copy(c).addScaledVector(view, -70).addScaledVector(right, 45).add(v3(0, 40, 0)); rimA.target.position.copy(c);
+  rimB.position.copy(c).addScaledVector(view, -70).addScaledVector(right, -50).add(v3(0, 30, 0)); rimB.target.position.copy(c);
+}
+let last = performance.now(), acc = 0; const STEP = 1 / 240;
+function frame(now) {
+  const dt = Math.max(0, Math.min(.05, (now - last) / 1000)); last = Math.max(last, now);
+  const t = now / 1000;
+  if (DEMO) {
+    const ang = T.MathUtils.degToRad(demo.view);
+    camera.position.set(Math.sin(ang) * demo.camDist, 13, Math.cos(ang) * demo.camDist); camera.lookAt(0, 5, 0);
+    plane.normal.set(Math.sin(ang), 0, Math.cos(ang)); demoPose(dt, t, now);
+  } else trackPose(now);
+  appear += ((now - lastSeen < 600 ? 1 : 0) - appear) * Math.min(1, dt * 7);
+  hatRoot.visible = poseOk && appear > .01;
+  if (poseOk) {
+    measureMotion(dt);
+    const tipBefore = charm.tipPrev ? charm.tipPrev.clone() : null;
+    acc = Math.min(acc + dt, .1); let steps = 0; while (acc >= STEP) { stepPhysics(STEP); acc -= STEP; steps++; }
+    buildSpine();
+    const tipNow = pts[N - 1].clone(), from = tipBefore || tipNow;
+    const tipVel = dt > 0 ? tipNow.clone().sub(from).divideScalar(dt) : v3();
+    for (let s = 1; s <= steps; s++) stepCharm(STEP, from.clone().lerp(tipNow, s / steps), tipVel);
+    charm.tipPrev = tipNow;
+    hatRoot.position.copy(anchor); hatRoot.scale.setScalar(.2 + .8 * (1 - Math.pow(1 - appear, 3)));
+    updateMeshes(t);
+  }
+  updateSparkles(dt, t); placeLights(); renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+if (DEMO) {
+  const $ = id => document.getElementById(id);
+  $('bShake').onclick = () => { demo.action = 'shake'; demo.actionT = 0; demo.idle = 0; };
+  $('bNod').onclick = () => { demo.action = 'nod'; demo.actionT = 0; demo.idle = 0; };
+  $('bLook').onclick = () => { demo.action = 'look'; demo.actionT = 0; demo.idle = 0; };
+  $('bMore').onclick = () => { const p = $('panel'); p.classList.toggle('open'); $('bMore').setAttribute('aria-expanded', p.classList.contains('open')); };
+  const bind = (id, fn) => $(id).addEventListener('input', e => fn(+e.target.value));
+  bind('sView', v => demo.view = v); bind('sFlop', v => CONFIG.floppiness = v); bind('sDroop', v => CONFIG.droop = v);
+  bind('sHeight', v => CONFIG.hatHeight = v); bind('sWeight', v => CONFIG.weight = v);
+  const tog = (id, k) => $(id).onclick = () => { CONFIG[k] = !CONFIG[k]; $(id).classList.toggle('on', CONFIG[k]); };
+  tog('bCharm', 'charm'); tog('bSpark', 'sparkles');
+  document.querySelectorAll('.sw').forEach(b => b.onclick = () => { document.querySelectorAll('.sw').forEach(x => x.classList.remove('on')); b.classList.add('on'); setHatColor(b.dataset.c); });
+  $('loading').remove();
+} else startTracking();
+
+window.__hat = { demo, CONFIG, get ok() { return poseOk; } };
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
