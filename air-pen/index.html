@@ -18,7 +18,8 @@ const CONFIG = {
   inkWidth: 7,                        // line thickness at 1080p
   inkGlow: 1.0,                       // 0 = flat ink, 1 = soft neon glow
   penCursor: true,                    // small ring at your fingertip so you can aim
-  pinchStart: 0.30,                   // how close fingertips must be to start drawing (lower = tighter pinch)
+  pinchStart: 0.30,                   // how close thumb and index must be to START a line (lower = tighter pinch)
+                                      // the line keeps going until your hand is clearly open
   waveErase: 3                        // back-and-forth swings needed to erase (within ~1 second)
 };
 const FORCE_DEMO = false;
@@ -124,47 +125,63 @@ function nextInk() {
   let pool = CONFIG.inkColors.filter(c => fam(c) !== lastFam); if (!pool.length) pool = CONFIG.inkColors;
   const c = pool[Math.floor(Math.random() * pool.length)]; lastFam = fam(c); return c;
 }
+// One-euro filter: removes jitter when you move slowly, stays responsive when you move fast
+function oneEuro(minCut, beta) {
+  let x = null, dx = 0, t0 = 0; const alpha = (cut, dt) => { const r = 2 * Math.PI * cut * dt; return r / (r + 1); };
+  return (v, t) => {
+    if (x === null) { x = v; t0 = t; return v; }
+    const dt = Math.max(1e-3, (t - t0) / 1000); t0 = t;
+    const d = (v - x) / dt; dx += alpha(1, dt) * (d - dx);
+    x += alpha(minCut + beta * Math.abs(dx), dt) * (v - x); return x;
+  };
+}
 function penUpdate(res, now) {
   if (!pen.on) return;
   const seen = {};
   const lms = (res && res.landmarks) || [], hs = (res && res.handednesses) || [];
   lms.forEach((lm, i) => {
     const key = (hs[i] && hs[i][0] && hs[i][0].categoryName) || ('h' + i); seen[key] = true;
-    const H = pen.hands[key] || (pen.hands[key] = { stroke: null, finger: -1, p: null, xs: [], dir: 0, ext: null, flips: [], lastSeen: 0 });
+    const H = pen.hands[key] || (pen.hands[key] = { stroke: null, drawing: false, pinchN: 0, openN: 0, p: null, fx: null, fy: null, ext: null, dir: 0, flips: [], lastSeen: 0 });
     H.lastSeen = now;
     const P = j => ({ x: lm[j].x * pen.W, y: lm[j].y * pen.H });
-    const scale = Math.hypot(P(0).x - P(9).x, P(0).y - P(9).y) || 1;
-    // which finger (if any) is pinching the thumb
-    const ratios = FINGERS.map(f => Math.hypot(P(4).x - P(f).x, P(4).y - P(f).y) / scale);
-    let finger = -1;
-    if (H.finger >= 0 && ratios[H.finger] < CONFIG.pinchStart * 1.5) finger = H.finger;     // keep drawing until clearly released
-    else { let best = 9; ratios.forEach((r, k) => { if (r < CONFIG.pinchStart && r < best) { best = r; finger = k; } }); }
-    const tip = finger >= 0 ? P(FINGERS[finger]) : P(8), th = P(4);
-    const raw = finger >= 0 ? { x: (tip.x + th.x) / 2, y: (tip.y + th.y) / 2 } : tip;
-    // adaptive smoothing: steady when slow, responsive when fast
-    if (!H.p) H.p = raw;
-    const sp = Math.hypot(raw.x - H.p.x, raw.y - H.p.y) / pen.s, a = Math.min(.85, .3 + sp * .02);
-    H.p = { x: H.p.x + (raw.x - H.p.x) * a, y: H.p.y + (raw.y - H.p.y) * a };
-    if (finger >= 0) {
-      if (!H.stroke || H.finger !== finger) { H.p = raw; H.stroke = { col: nextInk(), pts: [] }; pen.strokes.push(H.stroke); }
-      addPoint(H.stroke, { x: H.p.x, y: H.p.y });
-    } else H.stroke = null;
-    H.finger = finger; H.drawing = finger >= 0;
-    // wave to erase: count quick left-right reversals of the wrist (only while not drawing)
+    const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const wrist = P(0), scale = dist(wrist, P(9)) || 1;
+    const pinch = dist(P(4), P(8)) / scale;
+    // how many fingers are clearly straight (tip well beyond its middle knuckle)
+    const extended = [[8, 6], [12, 10], [16, 14], [20, 18]].filter(([t, k]) => dist(wrist, P(t)) > dist(wrist, P(k)) * 1.22).length;
+    const isPinch = pinch < CONFIG.pinchStart;
+    const isOpen = extended >= 3 && pinch > CONFIG.pinchStart * 2;
+    // smoothed pen tip = your index fingertip
+    if (!H.fx) { H.fx = oneEuro(.9, .012 / pen.s); H.fy = oneEuro(.9, .012 / pen.s); }
+    const tip = P(8), p = { x: H.fx(tip.x, now), y: H.fy(tip.y, now) }; H.p = p;
+    if (!H.drawing) {
+      H.pinchN = isPinch ? H.pinchN + 1 : 0;
+      if (H.pinchN >= 3) {                                        // pinch held ~0.1s: start a new line
+        H.drawing = true; H.openN = 0; H.stroke = { col: nextInk(), pts: [] }; pen.strokes.push(H.stroke); addPoint(H.stroke, p);
+      }
+    } else {
+      // while the hand looks like it's opening, hold the ink still (no hook at the end of the line);
+      // if it was just a flicker, drawing resumes from where you are
+      if (!isOpen) addPoint(H.stroke, p);
+      H.openN = isOpen ? H.openN + 1 : 0;
+      if (H.openN >= 4) { H.drawing = false; H.stroke = null; H.pinchN = 0; }   // hand clearly open for ~0.13s: stop
+    }
+    // wave to erase: quick left-right reversals of the wrist, only while not drawing
     const x = lm[0].x;
     if (H.drawing) { H.flips = []; H.ext = x; H.dir = 0; }
     else {
       if (H.ext === null) H.ext = x;
       const d = x - H.ext, dir = Math.sign(d);
-      if (Math.abs(d) > .045) {
-        if (H.dir && dir !== H.dir) H.flips.push(now);
-        H.dir = dir; H.ext = x;
-      } else if (dir === H.dir && Math.abs(d) > 0) H.ext = H.dir > 0 ? Math.max(H.ext, x) : Math.min(H.ext, x);
+      if (Math.abs(d) > .045) { if (H.dir && dir !== H.dir) H.flips.push(now); H.dir = dir; H.ext = x; }
+      else if (dir === H.dir && Math.abs(d) > 0) H.ext = H.dir > 0 ? Math.max(H.ext, x) : Math.min(H.ext, x);
       H.flips = H.flips.filter(t => now - t < 1100);
       if (H.flips.length >= CONFIG.waveErase) { H.flips = []; eraseInk(now); }
     }
   });
-  for (const k in pen.hands) if (!seen[k]) { const H = pen.hands[k]; H.stroke = null; H.drawing = false; if (now - H.lastSeen > 300) H.p = null; }
+  for (const k in pen.hands) if (!seen[k]) {                     // hand left the frame: end its line after a moment
+    const H = pen.hands[k];
+    if (now - H.lastSeen > 400) { H.drawing = false; H.stroke = null; H.pinchN = 0; H.p = null; H.fx = H.fy = null; }
+  }
 }
 function penRender(dt) {
   if (!pen.on) return;
