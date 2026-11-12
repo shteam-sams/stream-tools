@@ -69,7 +69,7 @@ const inkCv = document.createElement('canvas'), ictx = inkCv.getContext('2d');  
 const fadeCv = document.createElement('canvas'), fctx = fadeCv.getContext('2d');   // copy that dissolves on erase
 const glowCv = document.createElement('canvas'), gctx = glowCv.getContext('2d');   // blurred copy of the ink = soft neon glow
 let glowDirty = true;
-const pen = { on: true, hands: {}, strokes: [], fadeT: -1, sparks: [], lastErase: -1e9, W: 1, H: 1, s: 1 };
+const pen = { on: true, wave: { ext: null, dir: 0, flips: [] }, hands: {}, strokes: [], fadeT: -1, sparks: [], lastErase: -1e9, W: 1, H: 1, s: 1 };
 function penResize(W, H) {
   for (const c of [penCv, inkCv, fadeCv, glowCv]) { c.width = W; c.height = H; }
   pen.W = W; pen.H = H; pen.s = H / 1080; redrawInk();
@@ -166,16 +166,21 @@ function penUpdate(res, now) {
       H.openN = isOpen ? H.openN + 1 : 0;
       if (H.openN >= 4) { H.drawing = false; H.stroke = null; H.pinchN = 0; }   // hand clearly open for ~0.13s: stop
     }
-    // wave to erase: quick left-right reversals of the wrist, only while not drawing
-    const x = lm[0].x;
-    if (H.drawing) { H.flips = []; H.ext = x; H.dir = 0; }
-    else {
-      if (H.ext === null) H.ext = x;
-      const d = x - H.ext, dir = Math.sign(d);
-      if (Math.abs(d) > .045) { if (H.dir && dir !== H.dir) H.flips.push(now); H.dir = dir; H.ext = x; }
-      else if (dir === H.dir && Math.abs(d) > 0) H.ext = H.dir > 0 ? Math.max(H.ext, x) : Math.min(H.ext, x);
-      H.flips = H.flips.filter(t => now - t < 1100);
-      if (H.flips.length >= CONFIG.waveErase) { H.flips = []; eraseInk(now); }
+    // wave to erase: watch the FINGERTIPS swing (the wrist barely moves in a real wave).
+    // One shared counter, so the tracker swapping 'left'/'right' labels mid-wave doesn't matter.
+    if (i === 0) {
+      const W = pen.wave;
+      if (H.drawing) { W.flips = []; W.ext = null; W.dir = 0; }
+      else {
+        const tx = (P(8).x + P(12).x + P(16).x) / 3, need = scale * .45;      // a swing bigger than ~half your palm
+        if (W.ext === null) W.ext = tx;
+        const d = tx - W.ext, dir = Math.sign(d);
+        if (Math.abs(d) > need) { if (W.dir && dir !== W.dir) W.flips.push(now); W.dir = dir; W.ext = tx; }
+        else if (dir === W.dir) W.ext = W.dir > 0 ? Math.max(W.ext, tx) : Math.min(W.ext, tx);
+        else if (!W.dir && Math.abs(d) > need * .5) W.dir = dir;
+        W.flips = W.flips.filter(t => now - t < 1300);
+        if (W.flips.length >= CONFIG.waveErase) { W.flips = []; eraseInk(now); }
+      }
     }
   });
   for (const k in pen.hands) if (!seen[k]) {                     // hand left the frame: end its line after a moment
@@ -268,7 +273,7 @@ function frame(now) {
   if (handLm && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
     lastVideoTime = video.currentTime;
     try { penUpdate(handLm.detectForVideo(video, now), now); } catch (e) {}
-    if (DEBUG) { const n = Object.values(pen.hands).filter(H => now - H.lastSeen < 250).length; setStatus('Hands: ' + n + ' · strokes: ' + pen.strokes.length); }
+    if (DEBUG) { const n = Object.values(pen.hands).filter(H => now - H.lastSeen < 250).length; setStatus('Hands: ' + n + ' · strokes: ' + pen.strokes.length + ' · wave ' + pen.wave.flips.length + '/' + CONFIG.waveErase); }
   }
   penRender(dt);
   requestAnimationFrame(frame);
