@@ -17,10 +17,19 @@ const CONFIG = {
   inkColors: ["#56E2E1", "#DF41CF", "#FFCE00", "#C1BFFF", "#B3F2F1", "#EFA0E7", "#FFE67F"],   // GACA accents + tints
   inkWidth: 7,                        // line thickness at 1080p
   inkGlow: 1.0,                       // 0 = flat ink, 1 = soft neon glow
-  penCursor: true,                    // small ring at your fingertip so you can aim
+  inkFloat: 1.0,                      // floating-magic motion: a soft ripple + gentle bob (0 = still lines)
+  inkSparkle: true,                   // tiny sparkles now and then drift up off the ink
+  penCursor: true,                    // small ring at the pen point so you can aim
+  smoothFrames: 5,                    // the line follows the average of the last N frames (higher = smoother, a bit more lag)
   pinchStart: 0.30,                   // how close thumb and index must be to START a line (lower = tighter pinch)
                                       // the line keeps going until your hand is clearly open
-  waveErase: 3                        // back-and-forth swings needed to erase (within ~1 second)
+  waveErase: 3,                       // back-and-forth swings needed to erase (within ~1 second)
+  undoDoublePinch: true,              // two quick pinch taps = undo the last finished line
+
+  // ---- on / off: open BOTH hands, then close both into fists at the same time ----
+  toggleGesture: true,                // false = the pen is always on
+  startOn: false,                     // pen starts off; do the gesture to turn it on
+  handGlow: 1.0                       // glow on your hands while the pen is on (0 = none)
 };
 const FORCE_DEMO = false;
 </script>
@@ -53,7 +62,7 @@ const FORCE_DEMO = false;
 <div id="status">Starting…</div>
 <div id="ui">
   <header><h1>Air pen</h1><p>Press and drag to draw (that’s your pinch). Each new line gets a new GACA color.</p></header>
-  <div class="bar"><button id="bErase">Wave to erase ✨</button></div>
+  <div class="bar"><button id="bUndo">Undo</button><button id="bErase">Wave to erase ✨</button></div>
 </div>
 <script>
 (() => {
@@ -69,7 +78,7 @@ const inkCv = document.createElement('canvas'), ictx = inkCv.getContext('2d');  
 const fadeCv = document.createElement('canvas'), fctx = fadeCv.getContext('2d');   // copy that dissolves on erase
 const glowCv = document.createElement('canvas'), gctx = glowCv.getContext('2d');   // blurred copy of the ink = soft neon glow
 let glowDirty = true;
-const pen = { on: true, wave: { ext: null, dir: 0, flips: [] }, hands: {}, strokes: [], fadeT: -1, sparks: [], lastErase: -1e9, W: 1, H: 1, s: 1 };
+const pen = { on: true, armed: !CONFIG.toggleGesture || CONFIG.startOn, glow: 0, lastToggle: -1e9, wave: { ext: null, dir: 0, flips: [] }, hands: {}, strokes: [], fadeT: -1, sparks: [], lastErase: -1e9, W: 1, H: 1, s: 1 };
 function penResize(W, H) {
   for (const c of [penCv, inkCv, fadeCv, glowCv]) { c.width = W; c.height = H; }
   pen.W = W; pen.H = H; pen.s = H / 1080; redrawInk();
@@ -92,6 +101,34 @@ function drawSeg(ctx, a, b, c, col) {        // smooth segment through midpoints
   ctx.shadowBlur = 0; ctx.strokeStyle = coreOf(col); ctx.lineWidth = w * .32;
   ctx.beginPath(); ctx.moveTo(m1.x, m1.y); ctx.quadraticCurveTo(b.x, b.y, m2.x, m2.y); ctx.stroke();
 }
+// draw lines with a soft traveling ripple + gentle bob; each line is one path, so the glow stays smooth
+function renderStrokes(ctx, list, t, alphaMul = 1) {
+  const w = CONFIG.inkWidth * pen.s, amp = 3.2 * pen.s * CONFIG.inkFloat;
+  for (const s of list) {
+    const n = s.pts.length; if (!n) continue;
+    const total = s.pts[n - 1].l || 1, bob = Math.sin(t * .9 + s.phase) * amp * .7;
+    const Q = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const a = s.pts[Math.max(0, i - 2)], b = s.pts[Math.min(n - 1, i + 2)], p = s.pts[i];
+      let nx = -(b.y - a.y), ny = b.x - a.x; const L = Math.hypot(nx, ny) || 1; nx /= L; ny /= L;
+      const taper = .35 + .65 * Math.min(1, p.l / (40 * pen.s), (total - p.l) / (40 * pen.s));
+      const d = amp ? Math.sin(t * 1.7 - p.l / (38 * pen.s) + s.phase) * amp * taper : 0;
+      Q[i] = { x: p.x + nx * d, y: p.y + ny * d + bob };
+    }
+    const path = new Path2D();
+    path.moveTo(Q[0].x, Q[0].y);
+    if (n === 1) path.lineTo(Q[0].x + .1, Q[0].y);
+    for (let i = 1; i < n - 1; i++) path.quadraticCurveTo(Q[i].x, Q[i].y, (Q[i].x + Q[i + 1].x) / 2, (Q[i].y + Q[i + 1].y) / 2);
+    if (n > 1) path.lineTo(Q[n - 1].x, Q[n - 1].y);
+    ctx.save(); ctx.globalAlpha = alphaMul; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    if (CONFIG.inkGlow > 0) { ctx.shadowColor = s.col; ctx.shadowBlur = 16 * pen.s * CONFIG.inkGlow; }
+    ctx.strokeStyle = s.col; ctx.lineWidth = w; ctx.stroke(path);
+    if (CONFIG.inkGlow > 0) ctx.stroke(path);
+    ctx.shadowBlur = 0; ctx.strokeStyle = coreOf(s.col); ctx.lineWidth = w * .32; ctx.stroke(path);
+    ctx.restore();
+    s.Q = Q;
+  }
+}
 function redrawInk() {
   ictx.clearRect(0, 0, pen.W, pen.H);
   for (const s of pen.strokes) for (let i = 0; i < s.pts.length; i++) {
@@ -101,20 +138,31 @@ function redrawInk() {
 function addPoint(st, p) {
   const n = st.pts.length, last = st.pts[n - 1];
   if (last && Math.hypot(p.x - last.x, p.y - last.y) < 1.5 * pen.s) return;
-  st.pts.push(p); const k = st.pts.length;
-  drawSeg(ictx, st.pts[Math.max(0, k - 3)], st.pts[Math.max(0, k - 2)], st.pts[k - 1], st.col);
+  p.l = last ? last.l + Math.hypot(p.x - last.x, p.y - last.y) : 0;
+  if (st.phase === undefined) st.phase = Math.random() * 6.28;
+  st.pts.push(p);
 }
 const inkFadeSrc = document.createElement('canvas');
 function eraseInk(now) {
   inkFadeSrc.width = pen.W; inkFadeSrc.height = pen.H;
   if (!pen.strokes.length || now - pen.lastErase < 1200) return;
   pen.lastErase = now;
-  fctx.clearRect(0, 0, pen.W, pen.H); fctx.drawImage(inkCv, 0, 0); inkFadeSrc.getContext('2d').clearRect(0, 0, pen.W, pen.H); inkFadeSrc.getContext('2d').drawImage(inkCv, 0, 0); pen.fadeT = 0;
+  fctx.clearRect(0, 0, pen.W, pen.H); renderStrokes(fctx, pen.strokes, performance.now() / 1000); pen.fadeT = 0;
   for (const s of pen.strokes) for (let i = 0; i < s.pts.length; i += 3)            // sparkles lift off the ink
     if (pen.sparks.length < 900) pen.sparks.push({ x: s.pts[i].x, y: s.pts[i].y, vx: (Math.random() - .5) * 90 * pen.s, vy: (-40 - Math.random() * 120) * pen.s, age: 0, life: .5 + Math.random() * .6, col: s.col });
   pen.strokes = []; ictx.clearRect(0, 0, pen.W, pen.H); glowDirty = true;
-  fctx.save(); fctx.globalCompositeOperation = 'destination-over'; fctx.filter = `blur(${Math.max(1, 9 * pen.s)}px)`; fctx.drawImage(inkFadeSrc, 0, 0); fctx.restore();
   for (const k in pen.hands) pen.hands[k].stroke = null;
+}
+function undoLine(now, cutoff) {
+  // throw away any marks made by the taps themselves, then remove the last finished line
+  pen.strokes = pen.strokes.filter(s => s.t0 < cutoff);
+  const s = pen.strokes.pop();
+  redrawInk();
+  if (!s) return;
+  fctx.clearRect(0, 0, pen.W, pen.H); renderStrokes(fctx, [s], performance.now() / 1000);
+  pen.fadeT = 0;
+  for (let i = 0; i < s.pts.length; i += 4) if (pen.sparks.length < 900)
+    pen.sparks.push({ x: s.pts[i].x, y: s.pts[i].y, vx: (Math.random() - .5) * 60 * pen.s, vy: (-30 - Math.random() * 80) * pen.s, age: 0, life: .4 + Math.random() * .5, col: s.col });
 }
 const FINGERS = [8];                       // thumb + index only: the most reliable pinch
 // colors in the same family (a color and its tint) count as "the same", so each new line clearly changes
@@ -135,13 +183,23 @@ function oneEuro(minCut, beta) {
     x += alpha(minCut + beta * Math.abs(dx), dt) * (v - x); return x;
   };
 }
+function togglePen(now, hands) {
+  pen.armed = !pen.armed; pen.lastToggle = now;
+  for (const k in pen.hands) { const H = pen.hands[k]; H.openT = 0; H.drawing = false; H.stroke = null; H.pinchN = 0; H.taps = []; H.block = true; }
+  const cols = pen.armed ? ['#C1BFFF', '#56E2E1', '#FFFFFF', '#DF41CF'] : ['#C1BFFF', '#EDECF6'];
+  for (const H of hands) if (H.palm) for (let i = 0; i < (pen.armed ? 40 : 18); i++) {
+    const a = Math.random() * 6.28, sp = (60 + Math.random() * 160) * pen.s;
+    pen.sparks.push({ x: H.palm.x, y: H.palm.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40 * pen.s, age: 0, life: .4 + Math.random() * .5, col: cols[i % cols.length] });
+  }
+  setStatus('Air pen ' + (pen.armed ? 'ON' : 'OFF'));
+}
 function penUpdate(res, now) {
   if (!pen.on) return;
   const seen = {};
   const lms = (res && res.landmarks) || [], hs = (res && res.handednesses) || [];
   lms.forEach((lm, i) => {
-    const key = (hs[i] && hs[i][0] && hs[i][0].categoryName) || ('h' + i); seen[key] = true;
-    const H = pen.hands[key] || (pen.hands[key] = { stroke: null, drawing: false, pinchN: 0, openN: 0, p: null, fx: null, fy: null, ext: null, dir: 0, flips: [], lastSeen: 0 });
+    let key = (hs[i] && hs[i][0] && hs[i][0].categoryName) || ('h' + i); if (seen[key]) key += '2'; seen[key] = true;
+    const H = pen.hands[key] || (pen.hands[key] = { stroke: null, drawing: false, pinchN: 0, openN: 0, p: null, fx: null, fy: null, lastSeen: 0, rawOn: false, onT: 0, onPos: null, taps: [], block: false });
     H.lastSeen = now;
     const P = j => ({ x: lm[j].x * pen.W, y: lm[j].y * pen.H });
     const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -151,13 +209,42 @@ function penUpdate(res, now) {
     const extended = [[8, 6], [12, 10], [16, 14], [20, 18]].filter(([t, k]) => dist(wrist, P(t)) > dist(wrist, P(k)) * 1.22).length;
     const isPinch = pinch < CONFIG.pinchStart;
     const isOpen = extended >= 3 && pinch > CONFIG.pinchStart * 2;
-    // smoothed pen tip = your index fingertip
-    if (!H.fx) { H.fx = oneEuro(.9, .012 / pen.s); H.fy = oneEuro(.9, .012 / pen.s); }
-    const tip = P(8), p = { x: H.fx(tip.x, now), y: H.fy(tip.y, now) }; H.p = p;
+    // pen point = the center of your palm (wrist + the four knuckles): far steadier than any fingertip
+    const tip = P(8);
+    const palm = [0, 5, 9, 13, 17].reduce((a, j) => { const q = P(j); a.x += q.x / 5; a.y += q.y / 5; return a; }, { x: 0, y: 0 });
+    // ...then averaged over the last few frames for a smooth line
+    H.buf = H.buf || []; H.buf.push(palm); while (H.buf.length > Math.max(1, CONFIG.smoothFrames)) H.buf.shift();
+    const p = H.buf.reduce((a, q) => ({ x: a.x + q.x / H.buf.length, y: a.y + q.y / H.buf.length }), { x: 0, y: 0 }); H.p = p;
+    // remember the hand's shape for the glow, and track open / fist for the on-off gesture
+    H.px = lm.map((q, j) => P(j)); H.scale = scale; H.palm = palm;
+    // a fist = index finger curled into the palm (in a pinch it reaches out to the thumb) + most others curled
+    const indexIn = dist(P(8), palm) / scale < .75 && dist(P(8), palm) < dist(P(6), palm) * 1.05;   // tip folded back past its knuckle
+    const othersCurled = [12, 16, 20].filter(t => dist(P(t), palm) / scale < .95).length;
+    const isFist = indexIn && othersCurled >= 2 && extended <= 1;
+    if (isOpen) H.openT = now;
+    if (isFist) { if (!H.fistN) H.fistT = now; H.fistN = (H.fistN || 0) + 1; } else H.fistN = 0;
+    if (!pen.armed) { if (H.drawing) { H.drawing = false; H.stroke = null; } H.pinchN = 0; H.taps = []; return; }
+    if (isFist) { H.pinchN = 0; return; }                                   // a fist is never a pinch
+    // double pinch tap = undo
+    if (CONFIG.undoDoublePinch) {
+      if (!H.rawOn && pinch < CONFIG.pinchStart) { H.rawOn = true; H.onT = now; H.onPos = tip; }
+      else if (H.rawOn && pinch > CONFIG.pinchStart * 1.8) {
+        H.rawOn = false;
+        const quick = now - H.onT < 320, still = dist(tip, H.onPos) / scale < .6;
+        if (quick && still) H.taps.push(H.onT); else H.taps = [];
+        H.taps = H.taps.filter(t => now - t < 900);
+        if (H.taps.length >= 2) {
+          undoLine(now, H.taps[0] - 60);
+          H.taps = []; H.drawing = false; H.stroke = null; H.pinchN = 0; H.block = true;
+        }
+      }
+    }
+    if (H.block) { if (pinch > CONFIG.pinchStart * 1.5) H.block = false; else return; }   // wait for release before the next line
     if (!H.drawing) {
       H.pinchN = isPinch ? H.pinchN + 1 : 0;
       if (H.pinchN >= 3) {                                        // pinch held ~0.1s: start a new line
-        H.drawing = true; H.openN = 0; H.stroke = { col: nextInk(), pts: [] }; pen.strokes.push(H.stroke); addPoint(H.stroke, p);
+        H.buf = [palm]; const p0 = { x: palm.x, y: palm.y }; H.p = p0;
+        H.drawing = true; H.openN = 0; H.stroke = { col: nextInk(), pts: [], t0: now }; pen.strokes.push(H.stroke); addPoint(H.stroke, p0);
       }
     } else {
       // while the hand looks like it's opening, hold the ink still (no hook at the end of the line);
@@ -183,30 +270,58 @@ function penUpdate(res, now) {
       }
     }
   });
+  // on/off: both hands were open recently, and both just closed into fists at about the same time
+  if (CONFIG.toggleGesture) {
+    const vis = Object.keys(seen).map(k => pen.hands[k]);
+    if (vis.length >= 2) {
+      const [a, b] = vis;
+      if (a.fistN >= 2 && b.fistN >= 2 && now - (a.openT || 0) < 900 && now - (b.openT || 0) < 900 &&
+          Math.abs(a.fistT - b.fistT) < 450 && now - pen.lastToggle > 1500) togglePen(now, vis);
+    }
+  }
   for (const k in pen.hands) if (!seen[k]) {                     // hand left the frame: end its line after a moment
     const H = pen.hands[k];
-    if (now - H.lastSeen > 400) { H.drawing = false; H.stroke = null; H.pinchN = 0; H.p = null; H.fx = H.fy = null; }
+    if (now - H.lastSeen > 400) { H.drawing = false; H.stroke = null; H.pinchN = 0; H.p = null; H.buf = []; }
   }
 }
 function penRender(dt) {
   if (!pen.on) return;
   pctx.clearRect(0, 0, pen.W, pen.H);
-  if (CONFIG.inkGlow > 0) {
-    if (glowDirty) { gctx.clearRect(0, 0, pen.W, pen.H); gctx.filter = `blur(${Math.max(1, 9 * pen.s)}px)`; gctx.drawImage(inkCv, 0, 0); gctx.filter = 'none'; glowDirty = false; }
-    pctx.globalAlpha = Math.min(1, CONFIG.inkGlow); pctx.drawImage(glowCv, 0, 0); pctx.drawImage(glowCv, 0, 0); pctx.globalAlpha = 1;
+  const tNow = performance.now() / 1000;
+  renderStrokes(pctx, pen.strokes, tNow);
+  if (CONFIG.inkSparkle && pen.strokes.length && Math.random() < dt * Math.min(10, 2 + pen.strokes.length * 1.2)) {
+    const s = pen.strokes[Math.floor(Math.random() * pen.strokes.length)];
+    if (s.Q && s.Q.length && pen.sparks.length < 900) { const q = s.Q[Math.floor(Math.random() * s.Q.length)];
+      pen.sparks.push({ x: q.x, y: q.y, vx: (Math.random() - .5) * 14 * pen.s, vy: (-18 - Math.random() * 26) * pen.s, age: 0, life: .9 + Math.random() * .8, col: s.col, small: true }); }
   }
-  pctx.drawImage(inkCv, 0, 0);
   if (pen.fadeT >= 0) {                      // erased ink dissolves upward
     pen.fadeT += dt; const k = pen.fadeT / .55;
     if (k >= 1) pen.fadeT = -1;
     else { pctx.save(); pctx.globalAlpha = (1 - k) * (1 - k); pctx.drawImage(fadeCv, 0, -k * 14 * pen.s); pctx.restore(); }
   }
-  for (const s of pen.sparks) { s.age += dt; s.x += s.vx * dt; s.y += s.vy * dt; s.vy += 60 * pen.s * dt; }
+  for (const s of pen.sparks) { s.age += dt; s.x += s.vx * dt; s.y += s.vy * dt; if (!s.small) s.vy += 60 * pen.s * dt; }
   pen.sparks = pen.sparks.filter(s => s.age < s.life);
   for (const s of pen.sparks) { const k = 1 - s.age / s.life; pctx.globalAlpha = k; pctx.fillStyle = s.col; pctx.shadowColor = s.col; pctx.shadowBlur = 8 * pen.s;
-    pctx.beginPath(); pctx.arc(s.x, s.y, (1.5 + 2.5 * k) * pen.s, 0, 7); pctx.fill(); }
+    pctx.beginPath(); pctx.arc(s.x, s.y, (s.small ? (.8 + 1.4 * Math.sin(k * Math.PI)) : (1.5 + 2.5 * k)) * pen.s, 0, 7); pctx.fill(); }
   pctx.globalAlpha = 1; pctx.shadowBlur = 0;
-  if (CONFIG.penCursor) for (const k in pen.hands) {        // aiming ring at your fingertip
+  // soft glow on your hands while the pen is on
+  pen.glow += ((pen.armed ? 1 : 0) - pen.glow) * Math.min(1, dt * 6);
+  if (pen.glow > .01 && CONFIG.handGlow > 0) {
+    const t = performance.now() / 1000;
+    pctx.save(); pctx.globalCompositeOperation = 'lighter';
+    for (const k in pen.hands) {
+      const H = pen.hands[k]; if (!H.px || performance.now() - H.lastSeen > 250) continue;
+      const r = H.scale * .42, a = .16 * pen.glow * CONFIG.handGlow * (.85 + .15 * Math.sin(t * 3 + H.scale));
+      H.px.forEach((q, j) => {
+        const col = j % 2 ? '193,191,255' : '86,226,225';
+        const g = pctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, r);
+        g.addColorStop(0, `rgba(${col},${a})`); g.addColorStop(1, `rgba(${col},0)`);
+        pctx.fillStyle = g; pctx.beginPath(); pctx.arc(q.x, q.y, r, 0, 7); pctx.fill();
+      });
+    }
+    pctx.restore();
+  }
+  if (CONFIG.penCursor && pen.armed) for (const k in pen.hands) {        // aiming ring at the pen point
     const H = pen.hands[k]; if (!H.p || performance.now() - H.lastSeen > 250) continue;
     const col = H.drawing && H.stroke ? H.stroke.col : 'rgba(255,255,255,.8)';
     pctx.strokeStyle = col; pctx.fillStyle = col; pctx.lineWidth = 2 * pen.s;
@@ -273,7 +388,7 @@ function frame(now) {
   if (handLm && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
     lastVideoTime = video.currentTime;
     try { penUpdate(handLm.detectForVideo(video, now), now); } catch (e) {}
-    if (DEBUG) { const n = Object.values(pen.hands).filter(H => now - H.lastSeen < 250).length; setStatus('Hands: ' + n + ' · strokes: ' + pen.strokes.length + ' · wave ' + pen.wave.flips.length + '/' + CONFIG.waveErase); }
+    if (DEBUG) { const n = Object.values(pen.hands).filter(H => now - H.lastSeen < 250).length; setStatus('Pen ' + (pen.armed ? 'ON' : 'OFF') + ' · hands: ' + n + ' · lines: ' + pen.strokes.length + ' · wave ' + pen.wave.flips.length + '/' + CONFIG.waveErase); }
   }
   penRender(dt);
   requestAnimationFrame(frame);
@@ -285,10 +400,11 @@ if (DEMO) {
   removeEventListener('resize', layout); addEventListener('resize', resizeDemo); resizeDemo();
   const pt = e => { const r = penCv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * pen.W, y: (e.clientY - r.top) / r.height * pen.H }; };
   let st = null;
-  penCv.addEventListener('pointerdown', e => { penCv.setPointerCapture(e.pointerId); st = { col: nextInk(), pts: [] }; pen.strokes.push(st); addPoint(st, pt(e)); });
+  penCv.addEventListener('pointerdown', e => { penCv.setPointerCapture(e.pointerId); st = { col: nextInk(), pts: [], t0: performance.now() }; pen.strokes.push(st); addPoint(st, pt(e)); });
   penCv.addEventListener('pointermove', e => { if (st) addPoint(st, pt(e)); });
   const end = () => { st = null; }; penCv.addEventListener('pointerup', end); penCv.addEventListener('pointercancel', end);
   document.getElementById('bErase').onclick = () => eraseInk(performance.now() + 2000);
+  document.getElementById('bUndo').onclick = () => undoLine(performance.now(), Infinity);
 } else if (!params.has('notrack')) start();
 requestAnimationFrame(frame);
 })();
