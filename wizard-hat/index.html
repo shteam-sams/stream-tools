@@ -10,13 +10,13 @@
    ===================================================================== */
 const CONFIG = {
   // ---- face tracking (OBS overlay) ----
-  cameraName: "OBS Virtual Camera",   // part of the camera's name is enough
+  cameraName: "NDI Webcam",   // part of the camera's name is enough
   mirror: false,                      // true if you flipped your camera horizontally in OBS
   camRect: { x: 0, y: 0, w: 1920, h: 1080 },   // where your camera sits on the 1920x1080 canvas
-  smoothing: 0.35,                    // 0..0.9, higher = steadier but laggier
-  sitHeight: 0,                       // nudge the hat up (+) or down (-), in cm
+  smoothing: 0.45,                    // 0..0.9, higher = steadier but laggier
+  sitHeight: +0.5,                       // nudge the hat up (+) or down (-), in cm
   sitDepth: -1,                        // nudge the hat back (-) or forward (+), in cm
-  fitSize: 1.1,                       // fine-tune the auto size (1 = matched to your face)
+  fitSize: 1.0,                       // fine-tune the auto size (1 = matched to your face)
   hideBrimBehindHead: false,          // true = an invisible head shape hides the brim behind your head (can cut the hat if the fit is off)
 
   // ---- look (GACA palette) ----
@@ -25,8 +25,7 @@ const CONFIG = {
   patchColors: ["#FFCE00", "#DF41CF", "#56E2E1", "#C1BFFF"],   // Amber, Fuchsia, Turquoise, Light Purple
   hatScale: 1.0,
   hatHeight: 1.2,
-  brimSize: 1.2,                      // width of the brim only (the crown stays the same): 0.7 = narrow, 1.5 = extra wide. In OBS you can also add &brim=1.3 to the URL
-  droop: 1.4,                         // how far the tip bends over (0 = straight up)
+  droop: 1.3,                         // how far the tip bends over (0 = straight up)
   droopSide: -1,                      // -1 = tip falls to the hat's left, 1 = right
   charm: true,                        // little brass star hanging from the tip
   sparkles: true,                     // a few drifting sparkles
@@ -36,22 +35,13 @@ const CONFIG = {
   blinkToggle: 3,                     // blink this many times quickly to poof the hat on/off (0 = off)
   blinkWindow: 1.3,                   // ...within this many seconds
 
-  // ---- air pen: pinch to draw, wave to erase ----
-  airPen: false,                      // the air pen now lives in its own overlay (air-pen/index.html)
-  inkColors: ["#56E2E1", "#DF41CF", "#FFCE00"],   // thumb+index, thumb+middle, thumb+ring (Turquoise, Fuchsia, Amber)
-  inkWidth: 7,                        // line thickness at 1080p
-  inkGlow: 1.0,                       // 0 = flat ink, 1 = soft neon glow
-  penCursor: true,                    // small ring at your fingertip so you can aim
-  pinchStart: 0.30,                   // how close fingertips must be to start drawing (lower = tighter pinch)
-  waveErase: 3,                       // back-and-forth swings needed to erase (within ~1 second)
-
   // ---- eyebrow raise: the hat stands up tall until your brows come down ----
   browStand: true,
   browThreshold: 0.22,                // how far above your resting brows counts as "raised" (lower = more sensitive)
   standHeight: 1.15,                  // how much taller it stretches when standing (1 = no stretch)
 
   // ---- physics ----
-  floppiness: 0.9,
+  floppiness: 0.7,
   weight: 1.1,                        // heavier = slower and calmer
   gravity: 1.0
 };
@@ -71,8 +61,6 @@ const FORCE_DEMO = false;
   *, *::before, *::after { box-sizing: inherit; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
   #gl { position: absolute; display: block; }
-  #pen { position: absolute; display: block; pointer-events: none; }
-  body.demo #pen { inset: 0; width: 100%; height: 100%; }
   #video { position: absolute; left: -10px; top: -10px; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
   #gl { background: transparent !important; }
   #status { position: absolute; left: 20px; top: 20px; font: 600 22px system-ui, sans-serif; color: #fff;
@@ -110,14 +98,13 @@ const FORCE_DEMO = false;
 <body>
 <video id="video" playsinline muted autoplay></video>
 <canvas id="gl"></canvas>
-<canvas id="pen"></canvas>
 <div id="status">Starting…</div>
 
 <div id="ui">
   <div id="loading">Stitching the hat…</div>
   <header>
     <h1>Wizard hat</h1>
-    <p>Drag the head to see the hat sway. Raise your eyebrows (Brows up) to make it stand tall.</p>
+    <p>Drag the head around. Tap Poof to make the hat vanish and reappear.</p>
   </header>
   <div id="panel">
     <div class="btns">
@@ -126,8 +113,6 @@ const FORCE_DEMO = false;
       <button class="act" id="bLook">Look</button>
       <button class="act" id="bPoof">Poof</button>
       <button id="bMore" aria-expanded="false">Adjust</button>
-    </div>
-    <div class="btns" style="margin-top:8px">
     </div>
     <div id="more">
       <div class="swatches"><span>Hat color</span>
@@ -141,13 +126,11 @@ const FORCE_DEMO = false;
       <div class="row"><label for="sFlop">Floppiness</label><input id="sFlop" type="range" min="0.2" max="3" step="0.05" value="0.8"></div>
       <div class="row"><label for="sDroop">Droop</label><input id="sDroop" type="range" min="0" max="2.2" step="0.05" value="1"></div>
       <div class="row"><label for="sHeight">Height</label><input id="sHeight" type="range" min="0.6" max="1.6" step="0.05" value="1"></div>
-      <div class="row"><label for="sBrim">Brim size</label><input id="sBrim" type="range" min="0.7" max="1.8" step="0.05" value="1"></div>
       <div class="row"><label for="sWeight">Weight</label><input id="sWeight" type="range" min="0.3" max="2.5" step="0.05" value="1"></div>
       <div class="btns toggles">
         <button id="bCharm" class="on">Charm</button>
         <button id="bSpark" class="on">Sparkles</button>
         <button id="bBrow">Brows up</button>
-
       </div>
     </div>
   </div>
@@ -384,7 +367,7 @@ const N = 10, RINGS = 96, SEG = 96;
 let autoScale = 1;                     // set from your face size when tracking
 const stand = { v: 0, vel: 0, target: 0 };    // 0 = normal droop, 1 = standing tall
 function dims() { const s = CONFIG.hatScale * autoScale, grow = 1 + (CONFIG.standHeight - 1) * Math.max(0, stand.v);
-  return { baseR: 9.6 * s, height: 33 * s * CONFIG.hatHeight * grow, brimR: 19 * s * Math.max(.6, Math.min(2.5, CONFIG.brimSize || 1)), seg: 33 * s * CONFIG.hatHeight * grow / (N - 1) }; }
+  return { baseR: 9.6 * s, height: 33 * s * CONFIG.hatHeight * grow, brimR: 19 * s, seg: 33 * s * CONFIG.hatHeight * grow / (N - 1) }; }
 function coneRadius(u) {
   const d = dims();
   return Math.max(.22, d.baseR * Math.pow(1 - u, 1.02) * (1 + .05 * Math.sin(Math.min(1, u * 1.6) * Math.PI)) + .25 * Math.exp(-u / .03));
@@ -452,7 +435,6 @@ function buildBrim() {
   if (IS_FRONT) brimUnder.renderOrder = -1;
   brimPivot.add(brimUnder);
 }
-{ const b = parseFloat(new URLSearchParams(location.search).get('brim')); if (b > 0) CONFIG.brimSize = b; }
 buildBrim();
 // front layer: only the outside of the cone draws; its inside just blocks
 if (IS_FRONT) {
@@ -746,15 +728,9 @@ const ray = new T.Raycaster(), plane = new T.Plane(v3(0, 0, 1), 0);
 function pointerWorld(e) { const r = canvas.getBoundingClientRect();
   ray.setFromCamera({ x: (e.clientX - r.left) / r.width * 2 - 1, y: -(e.clientY - r.top) / r.height * 2 + 1 }, camera);
   const p = v3(); return ray.ray.intersectPlane(plane, p) ? p : null; }
-let demoPen = false, demoStroke = null, demoInk = 0;
-const penPt = e => { const r = canvas.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * pen.W, y: (e.clientY - r.top) / r.height * pen.H }; };
 if (DEMO) {
-  canvas.addEventListener('pointerdown', e => { if (!demoPen) return; canvas.setPointerCapture(e.pointerId);
-    demoStroke = { col: CONFIG.inkColors[demoInk++ % CONFIG.inkColors.length], pts: [] }; pen.strokes.push(demoStroke); addPoint(demoStroke, penPt(e)); }, true);
-  canvas.addEventListener('pointermove', e => { if (demoPen && demoStroke) addPoint(demoStroke, penPt(e)); }, true);
-  canvas.addEventListener('pointerup', () => { demoStroke = null; }, true);
-  canvas.addEventListener('pointerdown', e => { if (demoPen) return; canvas.setPointerCapture(e.pointerId); const p = pointerWorld(e); if (p) dragOffset = demo.target.clone().sub(p); demo.idle = 0; });
-  canvas.addEventListener('pointermove', e => { if (demoPen || !dragOffset) return; const p = pointerWorld(e); if (p) demo.target.copy(p.add(dragOffset)); demo.idle = 0; });
+  canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture(e.pointerId); const p = pointerWorld(e); if (p) dragOffset = demo.target.clone().sub(p); demo.idle = 0; });
+  canvas.addEventListener('pointermove', e => { if (!dragOffset) return; const p = pointerWorld(e); if (p) demo.target.copy(p.add(dragOffset)); demo.idle = 0; });
   const end = () => { dragOffset = null; }; canvas.addEventListener('pointerup', end); canvas.addEventListener('pointercancel', end);
 }
 function spring(x, v, target, dt, w) { const f = 1 + 2 * dt * w, oo = w * w, hoo = dt * oo, hhoo = dt * hoo, det = 1 / (f + hhoo);
@@ -791,7 +767,7 @@ function demoPose(dt, t, now) {
   torso.position.copy(demo.pos); torso.rotation.set(0, demo.yaw * .2, demo.roll * .25);
 }
 
-let landmarker = null, lastVideoTime = -1, handLm = null;
+let landmarker = null, lastVideoTime = -1;
 // Open the camera to track. Goes straight for the named camera (OBS Virtual Camera) and never
 // grabs a webcam OBS is already using; if names aren't visible yet, tries cameras one by one.
 async function openTrackingCamera() {
@@ -830,12 +806,6 @@ async function startTracking() {
     const opts = dlg => ({ baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task', delegate: dlg },
       runningMode: 'VIDEO', numFaces: 1, outputFacialTransformationMatrixes: true, outputFaceBlendshapes: true });
     try { landmarker = await FaceLandmarker.createFromOptions(files, opts('GPU')); } catch (e) { landmarker = await FaceLandmarker.createFromOptions(files, opts('CPU')); }
-    if (pen.on) {
-      const { HandLandmarker } = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs');
-      const hopts = dlg => ({ baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task', delegate: dlg },
-        runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: .6, minHandPresenceConfidence: .5, minTrackingConfidence: .5 });
-      try { handLm = await HandLandmarker.createFromOptions(files, hopts('GPU')); } catch (e) { try { handLm = await HandLandmarker.createFromOptions(files, hopts('CPU')); } catch (e2) { console.warn('[pen] hand tracker unavailable', e2); } }
-    }
     setStatus('Tracking: ' + (stream.getVideoTracks()[0].label || 'camera'));
   } catch (e) { setStatus('Face tracking unavailable: ' + (e.message || e)); }
 }
@@ -852,7 +822,6 @@ function trackPose(now) {
   if (!landmarker || video.readyState < 2 || video.currentTime === lastVideoTime) return;
   lastVideoTime = video.currentTime;
   if (video.videoWidth) { const a = video.videoWidth / video.videoHeight; if (Math.abs(camera.aspect - a) > .001) { camera.aspect = a; camera.updateProjectionMatrix(); } }
-  if (handLm) { try { penUpdate(handLm.detectForVideo(video, now), now); } catch (e) {} }
   const res = landmarker.detectForVideo(video, now), mats = res.facialTransformationMatrixes, lms = res.faceLandmarks;
   if (!(mats && mats.length && lms && lms.length)) return;
   _m.fromArray(mats[0].data); _m.decompose(_p, _q, _s);
@@ -956,127 +925,16 @@ function appearScale(dtSince, showing) {
 }
 
 /* =====================================================================
-   AIR PEN: pinch to draw (index / middle / ring = three colors), wave to erase
-   ===================================================================== */
-const penCv = document.getElementById('pen'), pctx = penCv.getContext('2d');
-const inkCv = document.createElement('canvas'), ictx = inkCv.getContext('2d');      // ink is drawn once, kept here
-const fadeCv = document.createElement('canvas'), fctx = fadeCv.getContext('2d');   // copy that dissolves on erase
-const pen = { on: CONFIG.airPen && !IS_BACK, hands: {}, strokes: [], fadeT: -1, sparks: [], lastErase: -1e9, W: 1, H: 1, s: 1 };
-function penResize(W, H) {
-  for (const c of [penCv, inkCv, fadeCv]) { c.width = W; c.height = H; }
-  pen.W = W; pen.H = H; pen.s = H / 1080; redrawInk();
-}
-function strokeStyle(ctx, col, w, glow) {
-  ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = col; ctx.lineWidth = w;
-  ctx.shadowColor = col; ctx.shadowBlur = glow ? 16 * pen.s * CONFIG.inkGlow : 0;
-}
-function drawSeg(ctx, a, b, c, col) {        // smooth segment through midpoints, with a bright core
-  const w = CONFIG.inkWidth * pen.s;
-  const m1 = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, m2 = { x: (b.x + c.x) / 2, y: (b.y + c.y) / 2 };
-  strokeStyle(ctx, col, w, true); ctx.beginPath(); ctx.moveTo(m1.x, m1.y); ctx.quadraticCurveTo(b.x, b.y, m2.x, m2.y); ctx.stroke();
-  ctx.shadowBlur = 0; ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = w * .32;
-  ctx.beginPath(); ctx.moveTo(m1.x, m1.y); ctx.quadraticCurveTo(b.x, b.y, m2.x, m2.y); ctx.stroke();
-}
-function redrawInk() {
-  ictx.clearRect(0, 0, pen.W, pen.H);
-  for (const s of pen.strokes) for (let i = 0; i < s.pts.length; i++) {
-    const a = s.pts[Math.max(0, i - 2)], b = s.pts[Math.max(0, i - 1)], c = s.pts[i]; drawSeg(ictx, a, b, c, s.col);
-  }
-}
-function addPoint(st, p) {
-  const n = st.pts.length, last = st.pts[n - 1];
-  if (last && Math.hypot(p.x - last.x, p.y - last.y) < 1.5 * pen.s) return;
-  st.pts.push(p); const k = st.pts.length;
-  drawSeg(ictx, st.pts[Math.max(0, k - 3)], st.pts[Math.max(0, k - 2)], st.pts[k - 1], st.col);
-}
-function eraseInk(now) {
-  if (!pen.strokes.length || now - pen.lastErase < 1200) return;
-  pen.lastErase = now;
-  fctx.clearRect(0, 0, pen.W, pen.H); fctx.drawImage(inkCv, 0, 0); pen.fadeT = 0;
-  for (const s of pen.strokes) for (let i = 0; i < s.pts.length; i += 3)            // sparkles lift off the ink
-    if (pen.sparks.length < 900) pen.sparks.push({ x: s.pts[i].x, y: s.pts[i].y, vx: (Math.random() - .5) * 90 * pen.s, vy: (-40 - Math.random() * 120) * pen.s, age: 0, life: .5 + Math.random() * .6, col: s.col });
-  pen.strokes = []; ictx.clearRect(0, 0, pen.W, pen.H);
-  for (const k in pen.hands) pen.hands[k].stroke = null;
-}
-const FINGERS = [8, 12, 16];
-function penUpdate(res, now) {
-  if (!pen.on) return;
-  const seen = {};
-  const lms = (res && res.landmarks) || [], hs = (res && res.handednesses) || [];
-  lms.forEach((lm, i) => {
-    const key = (hs[i] && hs[i][0] && hs[i][0].categoryName) || ('h' + i); seen[key] = true;
-    const H = pen.hands[key] || (pen.hands[key] = { stroke: null, finger: -1, p: null, xs: [], dir: 0, ext: null, flips: [], lastSeen: 0 });
-    H.lastSeen = now;
-    const P = j => ({ x: lm[j].x * pen.W, y: lm[j].y * pen.H });
-    const scale = Math.hypot(P(0).x - P(9).x, P(0).y - P(9).y) || 1;
-    // which finger (if any) is pinching the thumb
-    const ratios = FINGERS.map(f => Math.hypot(P(4).x - P(f).x, P(4).y - P(f).y) / scale);
-    let finger = -1;
-    if (H.finger >= 0 && ratios[H.finger] < CONFIG.pinchStart * 1.5) finger = H.finger;     // keep drawing until clearly released
-    else { let best = 9; ratios.forEach((r, k) => { if (r < CONFIG.pinchStart && r < best) { best = r; finger = k; } }); }
-    const tip = finger >= 0 ? P(FINGERS[finger]) : P(8), th = P(4);
-    const raw = finger >= 0 ? { x: (tip.x + th.x) / 2, y: (tip.y + th.y) / 2 } : tip;
-    // adaptive smoothing: steady when slow, responsive when fast
-    if (!H.p) H.p = raw;
-    const sp = Math.hypot(raw.x - H.p.x, raw.y - H.p.y) / pen.s, a = Math.min(.85, .3 + sp * .02);
-    H.p = { x: H.p.x + (raw.x - H.p.x) * a, y: H.p.y + (raw.y - H.p.y) * a };
-    if (finger >= 0) {
-      if (!H.stroke || H.finger !== finger) { H.p = raw; H.stroke = { col: CONFIG.inkColors[finger % CONFIG.inkColors.length], pts: [] }; pen.strokes.push(H.stroke); }
-      addPoint(H.stroke, { x: H.p.x, y: H.p.y });
-    } else H.stroke = null;
-    H.finger = finger; H.drawing = finger >= 0;
-    // wave to erase: count quick left-right reversals of the wrist (only while not drawing)
-    const x = lm[0].x;
-    if (H.drawing) { H.flips = []; H.ext = x; H.dir = 0; }
-    else {
-      if (H.ext === null) H.ext = x;
-      const d = x - H.ext, dir = Math.sign(d);
-      if (Math.abs(d) > .045) {
-        if (H.dir && dir !== H.dir) H.flips.push(now);
-        H.dir = dir; H.ext = x;
-      } else if (dir === H.dir && Math.abs(d) > 0) H.ext = H.dir > 0 ? Math.max(H.ext, x) : Math.min(H.ext, x);
-      H.flips = H.flips.filter(t => now - t < 1100);
-      if (H.flips.length >= CONFIG.waveErase) { H.flips = []; eraseInk(now); }
-    }
-  });
-  for (const k in pen.hands) if (!seen[k]) { const H = pen.hands[k]; H.stroke = null; H.drawing = false; if (now - H.lastSeen > 300) H.p = null; }
-}
-function penRender(dt) {
-  if (!pen.on) return;
-  pctx.clearRect(0, 0, pen.W, pen.H);
-  pctx.drawImage(inkCv, 0, 0);
-  if (pen.fadeT >= 0) {                      // erased ink dissolves upward
-    pen.fadeT += dt; const k = pen.fadeT / .55;
-    if (k >= 1) pen.fadeT = -1;
-    else { pctx.save(); pctx.globalAlpha = (1 - k) * (1 - k); pctx.drawImage(fadeCv, 0, -k * 14 * pen.s); pctx.restore(); }
-  }
-  for (const s of pen.sparks) { s.age += dt; s.x += s.vx * dt; s.y += s.vy * dt; s.vy += 60 * pen.s * dt; }
-  pen.sparks = pen.sparks.filter(s => s.age < s.life);
-  for (const s of pen.sparks) { const k = 1 - s.age / s.life; pctx.globalAlpha = k; pctx.fillStyle = s.col; pctx.shadowColor = s.col; pctx.shadowBlur = 8 * pen.s;
-    pctx.beginPath(); pctx.arc(s.x, s.y, (1.5 + 2.5 * k) * pen.s, 0, 7); pctx.fill(); }
-  pctx.globalAlpha = 1; pctx.shadowBlur = 0;
-  if (CONFIG.penCursor) for (const k in pen.hands) {        // aiming ring at your fingertip
-    const H = pen.hands[k]; if (!H.p || performance.now() - H.lastSeen > 250) continue;
-    const col = H.drawing ? CONFIG.inkColors[H.finger % CONFIG.inkColors.length] : 'rgba(255,255,255,.8)';
-    pctx.strokeStyle = col; pctx.fillStyle = col; pctx.lineWidth = 2 * pen.s;
-    pctx.beginPath(); pctx.arc(H.p.x, H.p.y, (H.drawing ? 5 : 9) * pen.s, 0, 7); H.drawing ? pctx.fill() : pctx.stroke();
-  }
-}
-
-/* =====================================================================
    LAYOUT + LOOP
    ===================================================================== */
 function layout() {
   if (DEMO) {
     const r = canvas.getBoundingClientRect(); renderer.setSize(r.width, r.height, false); camera.aspect = r.width / r.height;
-    penResize(Math.round(r.width * Math.min(2, devicePixelRatio || 1)), Math.round(r.height * Math.min(2, devicePixelRatio || 1)));
     const tanH = Math.tan(T.MathUtils.degToRad(camera.fov / 2));
     demo.camDist = Math.max(42 / tanH, 26 / (tanH * camera.aspect)); camera.updateProjectionMatrix();
   } else {
     const R = CONFIG.camRect, sx = innerWidth / 1920, sy = innerHeight / 1080;
     Object.assign(canvas.style, { left: R.x * sx + 'px', top: R.y * sy + 'px', width: R.w * sx + 'px', height: R.h * sy + 'px', transform: CONFIG.mirror ? 'scaleX(-1)' : 'none' });
-    Object.assign(penCv.style, { left: canvas.style.left, top: canvas.style.top, width: canvas.style.width, height: canvas.style.height, transform: canvas.style.transform });
-    penResize(Math.round(R.w), Math.round(R.h));
     renderer.setSize(R.w * sx, R.h * sy, false); camera.aspect = R.w / R.h; camera.position.set(0, 0, 0); camera.lookAt(0, 0, -1); camera.updateProjectionMatrix();
   }
 }
@@ -1091,7 +949,6 @@ function placeLights() {
 }
 let last = performance.now(), acc = 0; const STEP = 1 / 240;
 function frame(now) {
-  requestAnimationFrame(frame);                      // always keep the loop alive, even if something below fails
   const dt = Math.max(0, Math.min(.05, (now - last) / 1000)); last = Math.max(last, now);
   const t = now / 1000;
   if (IS_BACK && follow && now - lastMsg < 600) {
@@ -1102,16 +959,15 @@ function frame(now) {
     headPos.fromArray(F.hp); poseOk = true;
     hatRoot.visible = appear > .01; hatRoot.position.copy(anchor); hatRoot.scale.setScalar(Math.max(.001, appear));
     if (F.ca && F.c) { camera.aspect = F.c; camera.updateProjectionMatrix(); }
-    if (F.bs && F.bs !== CONFIG.brimSize) { CONFIG.brimSize = F.bs; buildBrim(); }
     updateMeshes(t); points.visible = false;
     placeLights(); renderer.render(scene, camera);
-    return;
+    requestAnimationFrame(frame); return;
   }
   if (DEMO) {
     const ang = T.MathUtils.degToRad(demo.view);
     camera.position.set(Math.sin(ang) * demo.camDist, 13, Math.cos(ang) * demo.camDist); camera.lookAt(0, 5, 0);
     plane.normal.set(Math.sin(ang), 0, Math.cos(ang)); demoPose(dt, t, now);
-  } else { try { trackPose(now); } catch (e) { if (!frame.warned) { frame.warned = true; console.warn('[hat] tracking hiccup (ignored):', e); } } }
+  } else trackPose(now);
   const want = hatOn && poseOk && now - lastSeen < 600;
   if (want !== shown) {
     shown = want; showT = 0;
@@ -1134,11 +990,12 @@ function frame(now) {
     updateMeshes(t);
   }
   if (IS_BACK) { points.visible = false; puffs.forEach(p => p.sp.visible = false); } else { updateSparkles(dt, t); updatePuffs(dt); }
-  placeLights(); renderer.render(scene, camera); penRender(dt);
+  placeLights(); renderer.render(scene, camera);
   if (sync && !IS_BACK && !DEMO && poseOk) {
     const flat = new Float32Array(N * 3); pts.forEach((p, i) => p.toArray(flat, i * 3));
-    try { sync.postMessage({ a: anchor.toArray(), hq: headQuat.toArray(), q: hatQuat.toArray(), hp: headPos.toArray(), s: autoScale, ap: appear, p: Array.from(flat), c: camera.aspect, ca: 1, bs: CONFIG.brimSize }); } catch (e) {}
+    sync.postMessage({ a: anchor.toArray(), hq: headQuat.toArray(), q: hatQuat.toArray(), hp: headPos.toArray(), s: autoScale, ap: appear, p: Array.from(flat), c: camera.aspect, ca: 1 });
   }
+  requestAnimationFrame(frame);
 }
 
 if (DEMO) {
@@ -1150,7 +1007,7 @@ if (DEMO) {
   $('bMore').onclick = () => { const p = $('panel'); p.classList.toggle('open'); $('bMore').setAttribute('aria-expanded', p.classList.contains('open')); };
   const bind = (id, fn) => $(id).addEventListener('input', e => fn(+e.target.value));
   bind('sView', v => demo.view = v); bind('sFlop', v => CONFIG.floppiness = v); bind('sDroop', v => CONFIG.droop = v);
-  bind('sHeight', v => CONFIG.hatHeight = v); bind('sBrim', v => { CONFIG.brimSize = v; buildBrim(); }); bind('sWeight', v => CONFIG.weight = v);
+  bind('sHeight', v => CONFIG.hatHeight = v); bind('sWeight', v => CONFIG.weight = v);
   const tog = (id, k) => $(id).onclick = () => { CONFIG[k] = !CONFIG[k]; $(id).classList.toggle('on', CONFIG[k]); };
   tog('bCharm', 'charm'); tog('bSpark', 'sparkles');
   $('bBrow').onclick = () => { stand.target = stand.target ? 0 : 1; $('bBrow').classList.toggle('on', !!stand.target); $('bBrow').textContent = stand.target ? 'Brows down' : 'Brows up'; };
