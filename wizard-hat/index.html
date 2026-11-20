@@ -25,9 +25,9 @@ const CONFIG = {
   bandColor: "#56E2E1",               // Turquoise
   patchColors: ["#FFCE00", "#DF41CF", "#56E2E1", "#C1BFFF"],   // Amber, Fuchsia, Turquoise, Light Purple
   hatScale: 1.0,
-  hatHeight: 1.1,
-  brimSize: 1.1,                      // width of the brim only (the crown stays the same): 0.7 = narrow, 1.5 = extra wide. In OBS you can also add &brim=1.3 to the URL
-  droop: 1.3,                         // how far the tip bends over (0 = straight up)
+  hatHeight: 1.0,
+  brimSize: 1.0,                      // width of the brim only (the crown stays the same): 0.7 = narrow, 1.5 = extra wide. In OBS you can also add &brim=1.3 to the URL
+  droop: 1.0,                         // how far the tip bends over (0 = straight up)
   droopSide: -1,                      // -1 = tip falls to the hat's left, 1 = right
   charm: true,                        // little brass star hanging from the tip
   sparkles: true,                     // a few drifting sparkles
@@ -1769,8 +1769,9 @@ const PH = (() => { try { return (() => {
     f.s.position.copy(at); f.v.copy(vel); f.w = w; f.life = life; f.age = 0; f.wob = rnd2(0, 6); f.a = a; f.s.visible = true;
   }
   function burst(at, s) {
+    if (PIXEL) { for (let k = 0; k < 34; k++) { const a = Math.random() * 6.28, r = rnd2(0, 5); pxEmit(at.clone().add(v3(Math.cos(a) * r, rnd2(-2, 3), Math.sin(a) * r).multiplyScalar(s)), v3(Math.cos(a) * rnd2(6, 30), rnd2(20, 60), Math.sin(a) * rnd2(6, 30)).multiplyScalar(s), rnd2(3.5, 6.5) * s, rnd2(.5, 1), 'flame'); }
+      for (let k = 0; k < 26; k++) { const a = Math.random() * 6.28; pxEmit(at.clone(), v3(Math.cos(a) * rnd2(15, 45), rnd2(15, 65), Math.sin(a) * rnd2(15, 45)).multiplyScalar(s), 1, rnd2(.6, 1.3), 'spark'); } return; }
     for (let k = 0; k < 50; k++) emitFlame(at.clone().add(v3(rnd2(-4, 4), rnd2(-2, 3), rnd2(-4, 4)).multiplyScalar(s)), v3(rnd2(-12, 12), rnd2(25, 70), rnd2(-12, 12)).multiplyScalar(s), rnd2(4, 9) * s, rnd2(.45, .95), .5);
-    if (PIXEL) { for (let k = 0; k < 30; k++) { const a = Math.random() * 6.28; pxEmit(at.clone(), v3(Math.cos(a) * rnd2(10, 40), rnd2(20, 70), Math.sin(a) * rnd2(10, 40)).multiplyScalar(s), 1, rnd2(.6, 1.3), 'spark'); } return; }
     if (typeof sparks !== 'undefined') for (let k = 0; k < 40 && sparks.length < MAXP - MOTES; k++) {
       const a = Math.random() * 6.28; sparks.push({ p: at.clone(), v: v3(Math.cos(a) * rnd2(10, 40), rnd2(20, 70), Math.sin(a) * rnd2(10, 40)).multiplyScalar(s), age: 0, life: rnd2(.6, 1.3), c: SPARK[Math.random() * 5 | 0] }); }
   }
@@ -1917,7 +1918,14 @@ const PH = (() => { try { return (() => {
       st.dipV += (-60 * st.dip - 7 * st.dipV) * dt;
       if (st.mode === 'land' && (dist < 1.4 * s || (dist < 3.5 * s && st.vel.length() < 45 * s))) { st.mode = 'perch'; st.timer = rnd2(...CONFIG.phoenixPerchSeconds); st.pv = st.rv = 0; st.shuffle = .9; if (st.spot === 'brim') hatKick(1); }
       // fire trails from the wingtips and plumes
-      if (st.visible && st.appear > .5) {
+      if (st.visible && st.appear > .5 && PIXEL) {
+        const cR = v3(1, 0, 0).applyQuaternion(camera.quaternion), cU = v3(0, 1, 0).applyQuaternion(camera.quaternion), Lc = 16 * s;
+        const tail = st.pos.clone().addScaledVector(cR, -PX.dir * .55 * Lc).addScaledVector(cU, -.05 * Lc);
+        const n = Math.random() < dt * 48 ? 1 : 0;
+        for (let k = 0; k < n; k++) pxEmit(tail.clone().addScaledVector(cR, -PX.dir * rnd2(0, .5) * Lc).add(v3(rnd2(-1, 1), rnd2(-1, 1), rnd2(-1, 1)).multiplyScalar(s)),
+          st.vel.clone().multiplyScalar(-.18).add(v3(rnd2(-6, 6), rnd2(4, 14), rnd2(-6, 6)).multiplyScalar(s)), rnd2(2.6, 4.2) * s, rnd2(.35, .7), 'flame');
+        if (Math.random() < dt * 14) pxEmit(tail.clone(), st.vel.clone().multiplyScalar(-.1).add(v3(rnd2(-10, 10), rnd2(5, 20), rnd2(-10, 10)).multiplyScalar(s)), 1, rnd2(.5, 1), 'spark');
+      } else if (st.visible && st.appear > .5) {
         for (const W of (EXT.ready ? EXT.tips.slice(0, 2).map(b => ({ tipWorld: () => b.getWorldPosition(v3()) })) : wings)) if (Math.random() < dt * 30) { const tip = W.tipWorld(); emitFlame(tip, st.vel.clone().multiplyScalar(-.15), rnd2(1.2, 2.2) * s, rnd2(.25, .45), .35); }
         for (const pl of plumes) if (pl.p.length && Math.random() < dt * 14) emitFlame(pl.p[TN - 1].clone(), v3(0, 8 * s, 0), rnd2(1.5, 2.6) * s, rnd2(.3, .5), .35);
       }
@@ -1942,12 +1950,16 @@ const PH = (() => { try { return (() => {
         if (sp.x < x0 || sp.x > x1 || sp.y > top + .05) st.depth = want;
       }
     }
-    if (st.visible && st.appear > .5 && typeof sparks !== 'undefined' && plumes[0].p.length && Math.random() < dt * (st.mode === 'perch' ? 2 : 10)) {
+    if (PIXEL && st.visible && st.appear > .5 && st.mode === 'perch' && Math.random() < dt * 2.5) {
+      const cR = v3(1, 0, 0).applyQuaternion(camera.quaternion); pxEmit(st.pos.clone().addScaledVector(cR, -PX.dir * rnd2(.3, .9) * 16 * s).add(v3(0, rnd2(-6, 0) * s, 0)), v3(rnd2(-4, 4), rnd2(8, 18), rnd2(-4, 4)).multiplyScalar(s), 1, rnd2(.8, 1.5), 'ember');
+    }
+    if (!PIXEL && st.visible && st.appear > .5 && typeof sparks !== 'undefined' && plumes[0].p.length && Math.random() < dt * (st.mode === 'perch' ? 2 : 10)) {
       const pl = plumes[Math.random() * plumes.length | 0], p = pl.p[(TN * .5 + Math.random() * TN * .5) | 0];
       if (p && PIXEL) pxEmit(p.clone(), v3(rnd2(-6, 6), rnd2(8, 22), rnd2(-6, 6)).multiplyScalar(s), 1, rnd2(.5, 1.1), 'ember');
       else if (p && sparks.length < MAXP - MOTES) sparks.push({ p: p.clone(), v: v3(rnd2(-6, 6), rnd2(8, 22), rnd2(-6, 6)).multiplyScalar(s), age: 0, life: rnd2(.5, 1.1), c: SPARK[Math.random() * 3 | 0] });
     }
     updateFlames(dt);
+    if (PIXEL) { PFX.step(dt, t, s); PFX.render(t, s, false); }
     pose(t, dt);
   }
 
@@ -2118,11 +2130,90 @@ const PH = (() => { try { return (() => {
     PX.mesh = new T.Mesh(new T.PlaneGeometry(1, 1), new T.MeshBasicMaterial({ map: PX.tex, transparent: true, alphaTest: .5, toneMapped: false, side: T.DoubleSide }));
     PX.mesh.frustumCulled = false; PX.mesh.visible = false; PX.mesh.renderOrder = 2; scene.add(PX.mesh);
   }
-  function pxEmit(at, vel, w, life, kind) {
-    PX.fx.push({ p: at.clone(), v: vel.clone(), age: 0, life, kind, wob: Math.random() * 6, w,
-      col: kind === 'flame' ? (Math.random() < .55 ? PC.a : PC.f) : [PC.a, PC.t, PC.f, PC.at, '#FFFFFF'][Math.random() * 5 | 0] });
-    if (PX.fx.length > 320) PX.fx.shift();
-  }
+  /* =========================== PIXEL FLAMES ===========================
+     Every flame, spark and ember is its own particle in 3D space (so the hat hides/overlaps it correctly),
+     drawn as crisp pixel art on the same grid as the bird. Each particle goes to the FRONT or BACK layer
+     on its own, by its depth relative to your head, so a trail can wrap around you. */
+  const PFX = (() => {
+    const MAX = 260, CELL = 16, COLS = 6, ROWS = 3;
+    // sprite sheet: 4 flicker frames of a pixel flame + a spark + an ember, in 3 heat stages (hot → cooling)
+    const atlas = document.createElement('canvas'); atlas.width = CELL * COLS; atlas.height = CELL * ROWS; const a = atlas.getContext('2d');
+    const heat = [['#FFFFFF', '#FFE67F', '#FFCE00'], ['#FFE67F', '#FFCE00', '#DF41CF'], ['#FFCE00', '#DF41CF', '#512EAB']];   // core, middle, edge
+    const OUT = '#0D004D';
+    for (let r = 0; r < ROWS; r++) {
+      for (let f = 0; f < 4; f++) {
+        const ox = f * CELL, oy = r * CELL, grid = [];
+        for (let y = 0; y < CELL; y++) {
+          const t = (y + 1) / CELL, w = Math.pow(Math.sin(Math.PI * Math.min(1, t * 1.02)), .7) * 5.4 * (y < 9 ? .45 + .55 * y / 9 : 1);
+          const cx = 7.5 + Math.sin(y * .8 + f * 1.57) * 1.5 * (1 - y / 15);        // the tip licks side to side
+          for (let x = 0; x < CELL; x++) { const d = Math.abs(x + .5 - cx);
+            grid.push(d <= w * .3 && y > 8 ? 3 : d <= w * .62 && y > 3 ? 2 : d <= w ? 1 : 0); }
+        }
+        for (let y = 0; y < CELL; y++) for (let x = 0; x < CELL; x++) {
+          const v = grid[y * CELL + x];
+          if (v) { a.fillStyle = heat[r][3 - v]; a.fillRect(ox + x, oy + y, 1, 1); }
+          else if ((x && grid[y * CELL + x - 1]) || (x < CELL - 1 && grid[y * CELL + x + 1]) || (y && grid[(y - 1) * CELL + x]) || (y < CELL - 1 && grid[(y + 1) * CELL + x])) { a.fillStyle = OUT; a.fillRect(ox + x, oy + y, 1, 1); }
+        }
+      }
+      // spark: a little four-point twinkle
+      const sx = 4 * CELL + 6, sy = r * CELL + 6;
+      a.fillStyle = OUT; a.fillRect(sx - 1, sy + 1, 6, 2); a.fillRect(sx + 1, sy - 1, 2, 6);
+      a.fillStyle = heat[r][1]; a.fillRect(sx, sy + 1, 4, 2); a.fillRect(sx + 1, sy, 2, 4); a.fillStyle = heat[r][0]; a.fillRect(sx + 1, sy + 1, 2, 2);
+      // ember: a single glowing 2x2 pixel
+      const ex = 5 * CELL + 7, ey = r * CELL + 7; a.fillStyle = OUT; a.fillRect(ex - 1, ey - 1, 4, 4); a.fillStyle = heat[r][1]; a.fillRect(ex, ey, 2, 2);
+    }
+    const tex = new T.CanvasTexture(atlas); tex.magFilter = tex.minFilter = T.NearestFilter; tex.generateMipmaps = false;
+    const mat = new T.ShaderMaterial({
+      uniforms: { uAtlas: { value: tex }, uScale: { value: 500 }, uPx: { value: 3 } },
+      vertexShader: `uniform float uScale; uniform float uPx; attribute float aSize; attribute float aFrame; attribute float aRow; attribute float aAlpha;
+        varying float vF; varying float vR; varying float vA;
+        void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mv;
+          float raw = aSize * uScale / -mv.z, k = max(1.0, floor(raw / (16.0 * uPx) + 0.5));   // whole-number scales only: stays crisp pixel art
+          gl_PointSize = 16.0 * uPx * k; vF = aFrame; vR = aRow; vA = aAlpha; }`,
+      fragmentShader: `uniform sampler2D uAtlas; varying float vF; varying float vR; varying float vA;
+        void main() { vec2 pc = gl_PointCoord; vec4 c = texture2D(uAtlas, vec2((vF + pc.x) / 6.0, 1.0 - (vR + pc.y) / 3.0));
+          if (c.a < 0.5) discard;
+          vec2 cell = floor(pc * 16.0); float d = fract(sin(dot(cell + vec2(vF * 7.0, vR * 3.0), vec2(12.9898, 78.233))) * 43758.5453);
+          if (d > vA) discard;                 // dissolves pixel by pixel at the end of its life
+          gl_FragColor = vec4(c.rgb, 1.0); }`,
+      depthTest: true, depthWrite: false, transparent: false });
+    const mk = () => { const g = new T.BufferGeometry();
+      g.setAttribute('position', new T.BufferAttribute(new Float32Array(MAX * 3), 3).setUsage(T.DynamicDrawUsage));
+      for (const n of ['aSize', 'aFrame', 'aRow', 'aAlpha']) g.setAttribute(n, new T.BufferAttribute(new Float32Array(MAX), 1).setUsage(T.DynamicDrawUsage));
+      const p = new T.Points(g, mat); p.frustumCulled = false; p.renderOrder = 3; p.visible = false; scene.add(p); return p; };
+    const pts = mk();
+    let list = [];
+    const KIND = { flame: 0, spark: 1, ember: 2 };
+    function add(at, vel, w, life, kind) { if (list.length >= MAX) list.shift(); list.push({ p: at.clone(), v: vel.clone(), age: 0, life, k: KIND[kind] ?? 0, seed: Math.random(), w }); }
+    function step(dt, t, s) {
+      for (const f of list) { f.age += dt; f.p.addScaledVector(f.v, dt); f.v.multiplyScalar(Math.exp(-(f.k === 0 ? 2.4 : 1.4) * dt));
+        f.v.y += (f.k === 0 ? 26 : 10) * s * dt; f.v.x += Math.sin(t * 9 + f.seed * 40) * 10 * s * dt; }      // rise + flicker turbulence
+      list = list.filter(f => f.age < f.life);
+    }
+    const isBack = (f, s) => !!LAYER && f.p.z < headPos.z - 3 * s;
+    function render(t, s, onlyBack) {
+      const g = pts.geometry, P = g.attributes.position.array, S = g.attributes.aSize.array, F = g.attributes.aFrame.array, Rw = g.attributes.aRow.array, A = g.attributes.aAlpha.array;
+      let n = 0;
+      for (const f of list) {
+        const back = onlyBack ? true : isBack(f, s); if (LAYER && (IS_FRONT ? back : !back)) continue;
+        const u = f.age / f.life; P[n * 3] = f.p.x; P[n * 3 + 1] = f.p.y; P[n * 3 + 2] = f.p.z;
+        S[n] = f.k === 0 ? f.w * (1.25 - u * .55) : f.k === 1 ? 2.4 * s : 1.6 * s;
+        F[n] = f.k === 0 ? Math.floor(t * 14 + f.seed * 4) % 4 : f.k === 1 ? 4 : 5;
+        Rw[n] = Math.min(2, Math.floor(u * 3)); A[n] = 1 - Math.max(0, (u - .55) / .45); n++;
+      }
+      g.setDrawRange(0, n); pts.visible = n > 0;
+      for (const k of ['position', 'aSize', 'aFrame', 'aRow', 'aAlpha']) g.attributes[k].needsUpdate = true;
+      const H = renderer.domElement.height || 1080; mat.uniforms.uScale.value = H / (2 * Math.tan(T.MathUtils.degToRad(camera.fov / 2)));
+      mat.uniforms.uPx.value = CONFIG.phoenixPixelSize * (H / 1080);
+    }
+    // the back layer gets only the particles that are behind you
+    const exportBack = s => list.filter(f => isBack(f, s)).slice(-140).map(f => [f.p.x, f.p.y, f.p.z, f.k, f.age, f.life, f.seed, f.w]);
+    function importBack(arr) { list = (arr || []).map(r => ({ p: v3(r[0], r[1], r[2]), v: v3(), k: r[3], age: r[4], life: r[5], seed: r[6], w: r[7] })); }
+    return { add, step, render, exportBack, importBack };
+  })();
+
+  function pxEmit(at, vel, w, life, kind) { PFX.add(at, vel, w, life, kind); }
+
   // ----- 2D drawing helpers (texel space) -----
   const hexA = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; };
   function capsule(c, x, y, ang, len, wid) { c.save(); c.translate(x, y); c.rotate(ang); c.beginPath(); c.moveTo(0, -wid / 2); c.lineTo(len - wid / 2, -wid / 2);
@@ -2185,10 +2276,7 @@ const PH = (() => { try { return (() => {
     if (!PIXEL) return;
     const s = sc(), N = PX.N, c = PX.ctx;
     // effects
-    for (const f of PX.fx) { f.age += dt; f.p.addScaledVector(f.v, dt); f.v.multiplyScalar(Math.exp(-1.6 * dt)); if (f.kind === 'flame') f.v.y += 30 * s * dt; }
-    PX.fx = PX.fx.filter(f => f.age < f.life);
-    const showFx = PX.fx.length && (!LAYER || IS_FRONT);
-    PX.mesh.visible = !!(vis || showFx); if (!PX.mesh.visible) return;
+    PX.mesh.visible = !!vis; if (!PX.mesh.visible) return;
     camera.updateMatrixWorld(); camR.set(1, 0, 0).applyQuaternion(camera.quaternion); camU.set(0, 1, 0).applyQuaternion(camera.quaternion);
     const dist = Math.max(10, camera.position.distanceTo(st.pos)), Hs = renderer.domElement.height || 1080;
     const pxPerCm = Hs / (2 * dist * Math.tan(T.MathUtils.degToRad(camera.fov / 2)));
@@ -2231,10 +2319,6 @@ const PH = (() => { try { return (() => {
       const sx = Math.sign(PX.sx || 1) * Math.max(.12, Math.abs(PX.sx));
       c.save(); c.translate(N / 2, N / 2); c.scale(sx * pop, pop); PXB.draw(c, P); c.restore();
     }
-    for (const f of PX.fx) { const q = toT(f.p), k = 1 - f.age / f.life;
-      if (f.kind === 'flame') { const r = Math.max(1.5, f.w / texelCm * (.55 + .45 * Math.sin(k * Math.PI))); flamePath(c, q.x, q.y + r * .6, -Math.PI / 2 + Math.sin(f.age * 9 + f.wob) * .25, r * 2.2, r * 1.4);
-        c.fillStyle = f.col; c.fill(); flamePath(c, q.x, q.y + r * .45, -Math.PI / 2, r * 1.2, r * .7); c.fillStyle = PC.at; c.fill(); }
-      else { c.fillStyle = f.col; const sz = f.kind === 'spark' ? 2 : 1; c.fillRect(Math.round(q.x), Math.round(q.y), sz, sz); } }
     PXB.finish(c, N, N);
     PX.tex.needsUpdate = true;
 
@@ -2247,12 +2331,14 @@ const PH = (() => { try { return (() => {
   function exportState() {
     const o = {}; KEYS.forEach(k => o[k] = st[k]);
     o.pos = st.pos.toArray(); o.fwd = st.fwd.toArray(); o.headW = st.headW ? st.headW.toArray() : null;
+    if (PIXEL) o.fx = PFX.exportBack(sc());
     o.plumes = plumes.map(p => p.p.map(v => [v.x, v.y, v.z])); o.shL = shoulderL && shoulderL.toArray(); o.shR = shoulderR && shoulderR.toArray(); return o;
   }
   function importState(o, t) {
     if (!o) return; KEYS.forEach(k => { if (k in o) st[k] = o[k]; });
     st.pos.fromArray(o.pos); st.fwd.fromArray(o.fwd); st.headW = o.headW ? v3().fromArray(o.headW) : null;
     plumes.forEach((p, i) => { p.p = (o.plumes[i] || []).map(a => v3(a[0], a[1], a[2])); p.q = p.p.map(v => v.clone()); });
+    if (PIXEL) { PFX.importBack(o.fx); PFX.render(t, sc(), true); }
     shoulderL = o.shL ? v3().fromArray(o.shL) : null; shoulderR = o.shR ? v3().fromArray(o.shR) : null;
     const b = brimPerch().local.clone().setY(0).normalize(), ax = v3().crossVectors(UP, b).normalize(); brimQ.setFromAxisAngle(ax.lengthSq() ? ax : X1, st.dip * (st.visible ? st.appear : 0));
     pose(t, 0);
