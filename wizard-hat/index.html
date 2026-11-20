@@ -16,7 +16,8 @@ const CONFIG = {
   smoothing: 0.45,                    // 0..0.9, higher = steadier but laggier
   sitHeight: 0,                       // nudge the hat up (+) or down (-), in cm
   sitDepth: 0,                        // nudge the hat back (-) or forward (+), in cm
-  fitSize: 1.0,                       // fine-tune the auto size (1 = matched to your face)
+  fitSize: 1.0,                       // hat size (1 = normal)
+  autoFit: false,                     // false = steady tracking (the smooth 11/12 behavior, recommended). true = re-measure your face every frame (can be jumpy)
   hideBrimBehindHead: false,          // true = an invisible head shape hides the brim behind your head (can cut the hat if the fit is off)
 
   // ---- look (GACA palette) ----
@@ -510,6 +511,7 @@ if (DEMO) {
   shoulders.castShadow = shoulders.receiveShadow = true; torso.add(shoulders);
   const chest = new T.Mesh(new T.SphereGeometry(1, 64, 48), clay); chest.scale.set(13.5, 10, 7.2); chest.position.set(0, -27, -.6); chest.castShadow = chest.receiveShadow = true; torso.add(chest);
 } else {
+  anchorLocal = v3(0, 9.5, -3.2);      // where the crown of your head is, relative to the face tracker (as on 11/12)
   // invisible: hides only the part of the brim that's behind your head; never covers your face
   if (CONFIG.hideBrimBehindHead) { occ = new T.Mesh(new T.SphereGeometry(1, 48, 32), new T.MeshBasicMaterial({ colorWrite: false })); occ.renderOrder = -1; head.add(occ); }
 }
@@ -735,7 +737,7 @@ function setPose(pos, quat, now, anchorWorld) {
   headPos.lerp(pos, 1 - s); headQuat.slerp(quat, 1 - s);
   head.position.copy(headPos); head.quaternion.copy(headQuat);
   if (anchorWorld) { fitAnchor.lerp(anchorWorld, 1 - s); anchor = fitAnchor.clone(); }
-  else anchor = anchorLocal.clone().applyQuaternion(headQuat).add(headPos);
+  else { const a = anchorLocal.clone(); if (!DEMO) { a.y += CONFIG.sitHeight; a.z += CONFIG.sitDepth; } anchor = a.applyQuaternion(headQuat).add(headPos); }
   if (!poseOk) resetChain();
   poseOk = true; lastSeen = now;
 }
@@ -853,20 +855,28 @@ function trackPose(now) {
   lastVideoTime = video.currentTime;
   if (video.videoWidth) { const a = video.videoWidth / video.videoHeight; if (Math.abs(camera.aspect - a) > .001) { camera.aspect = a; camera.updateProjectionMatrix(); } }
   if (handLm) { try { penUpdate(handLm.detectForVideo(video, now), now); } catch (e) {} }
-  const res = landmarker.detectForVideo(video, now), mats = res.facialTransformationMatrixes, lms = res.faceLandmarks;
+  processFace(landmarker.detectForVideo(video, now), now);
+}
+function processFace(res, now) {
+  const mats = res.facialTransformationMatrixes, lms = res.faceLandmarks;
   if (!(mats && mats.length && lms && lms.length)) return;
   _m.fromArray(mats[0].data); _m.decompose(_p, _q, _s);
-  const lm = lms[0], z = Math.min(-5, _p.z);
-  // measure YOUR face: forehead top (10), chin (152), cheek edges (234, 454)
-  const top = toCam(lm[10], z), chin = toCam(lm[152], z), cl = toCam(lm[234], z), cr = toCam(lm[454], z);
-  const size = Math.max(cl.distanceTo(cr), top.distanceTo(chin) * .8);     // robust when you turn or tilt
-  faceSize = faceSize ? faceSize + (size - faceSize) * .12 : size;
-  autoScale = faceSize / 14.5 * CONFIG.fitSize;
-  const q = _q.clone(), up = v3(0, 1, 0).applyQuaternion(q), back = v3(0, 0, -1).applyQuaternion(q);
-  // the crown of the head sits a little above and well behind the top of the forehead
-  const anchorW = top.clone().addScaledVector(up, faceSize * .1 + CONFIG.sitHeight).addScaledVector(back, faceSize * .42 - CONFIG.sitDepth);
-  const center = top.clone().addScaledVector(up, -faceSize * .45).addScaledVector(back, faceSize * .45);
-  setPose(center, q, now, anchorW);
+  const lm = lms[0], z = Math.min(-5, _p.z), q = _q.clone();
+  if (!CONFIG.autoFit) {
+    // steady tracking (as on 11/12): follow the face tracker's whole-head pose, fixed hat size
+    autoScale = CONFIG.fitSize; faceSize = 14.5 * CONFIG.fitSize;
+    setPose(_p.clone(), q, now);
+  } else {
+    // auto-fit: measure your forehead top (10), chin (152), cheek edges (234, 454); heavily smoothed
+    const top = toCam(lm[10], z), chin = toCam(lm[152], z), cl = toCam(lm[234], z), cr = toCam(lm[454], z);
+    const size = Math.max(cl.distanceTo(cr), top.distanceTo(chin) * .8);
+    faceSize = faceSize ? faceSize + (size - faceSize) * .03 : size;
+    autoScale = faceSize / 14.5 * CONFIG.fitSize;
+    const up = v3(0, 1, 0).applyQuaternion(q), back = v3(0, 0, -1).applyQuaternion(q);
+    const anchorW = top.clone().addScaledVector(up, faceSize * .1 + CONFIG.sitHeight).addScaledVector(back, faceSize * .42 - CONFIG.sitDepth);
+    const center = top.clone().addScaledVector(up, -faceSize * .45).addScaledVector(back, faceSize * .45);
+    setPose(center, q, now, anchorW);
+  }
   if (occ) { occ.scale.set(faceSize * .47, faceSize * .62, faceSize * .5); occ.position.set(0, faceSize * .12, -faceSize * .12); }
   const bs = res.faceBlendshapes && res.faceBlendshapes[0];
   // eyebrow raise -> stand up (measured against your own resting brows)
@@ -1160,7 +1170,7 @@ if (DEMO) {
   setTimeout(() => { if (performance.now() - lastMsg > 2500) { console.warn('[hat] no front layer heard; tracking on my own'); startTracking(); } else setStatus('Back layer: following the front layer'); }, 3000);
 } else startTracking();
 
-window.__hat = { demo, CONFIG, get ok() { return poseOk; } };
+window.__hat = { demo, CONFIG, get ok() { return poseOk; }, feed: (res, now) => processFace(res, now), get anchor() { return anchor.toArray(); }, get scale() { return autoScale; } };
 requestAnimationFrame(frame);
 })();
 </script>
