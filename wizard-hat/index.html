@@ -17,7 +17,7 @@ const CONFIG = {
   sitHeight: 0,                       // nudge the hat up (+) or down (-), in cm
   sitDepth: 0,                        // nudge the hat back (-) or forward (+), in cm
   fitSize: 1.0,                       // hat size (1 = normal)
-  autoFit: false,                     // false = steady tracking (the smooth 11/12 behavior, recommended). true = re-measure your face every frame (can be jumpy)
+  autoFit: false,                     // false = steady tracking (recommended). true = re-measure your face every frame (can be jumpy)
   hideBrimBehindHead: false,          // true = an invisible head shape hides the brim behind your head (can cut the hat if the fit is off)
 
   // ---- look (GACA palette) ----
@@ -25,9 +25,9 @@ const CONFIG = {
   bandColor: "#56E2E1",               // Turquoise
   patchColors: ["#FFCE00", "#DF41CF", "#56E2E1", "#C1BFFF"],   // Amber, Fuchsia, Turquoise, Light Purple
   hatScale: 1.0,
-  hatHeight: 1.0,
-  brimSize: 1.0,                      // width of the brim only (the crown stays the same): 0.7 = narrow, 1.5 = extra wide. In OBS you can also add &brim=1.3 to the URL
-  droop: 1.0,                         // how far the tip bends over (0 = straight up)
+  hatHeight: 1.1,
+  brimSize: 1.1,                      // width of the brim only (the crown stays the same): 0.7 = narrow, 1.5 = extra wide. In OBS you can also add &brim=1.3 to the URL
+  droop: 1.3,                         // how far the tip bends over (0 = straight up)
   droopSide: -1,                      // -1 = tip falls to the hat's left, 1 = right
   charm: true,                        // little brass star hanging from the tip
   sparkles: true,                     // a few drifting sparkles
@@ -46,6 +46,28 @@ const CONFIG = {
   pinchStart: 0.30,                   // how close fingertips must be to start drawing (lower = tighter pinch)
   waveErase: 3,                       // back-and-forth swings needed to erase (within ~1 second)
 
+  // ---- phoenix familiar (lives in the same 3D scene as the hat) ----
+  phoenix: true,
+  phoenixStyle: "pixel",             // "pixel" = GACA pixel art (lives in the hat's 3D scene), "3d" = the built-in 3D bird
+  phoenixPixelSize: 3,                // screen pixels per art pixel at 1080p (bigger = chunkier, smaller = more detail)
+  phoenixShoulder: "left",            // which of YOUR shoulders it perches on: "left" or "right"
+  phoenixSize: 1.0,
+  phoenixStartVisible: false,         // hidden until you snap your fingers
+  phoenixAutoFly: true,               // takes off by itself now and then
+  phoenixPerchSeconds: [25, 50],
+  phoenixFlightSeconds: [10, 18],
+  phoenixHatPerch: 0.35,              // chance it lands on the hat brim instead of your shoulder
+  // artist-made 3D bird (recommended for realism): put the .glb next to this file and name it here, e.g. "phoenix.glb"
+  phoenixModel: "",
+  phoenixModelForward: "+z",          // which way the model's beak points in the file: "+z", "-z", "+x" or "-x"
+  phoenixModelSize: 1.0,              // fine-tune its size
+  phoenixTint: 0.85,                  // 0 = the model's own colors, 1 = fully remapped to GACA colors (keeps its texture detail)
+  phoenixExtraPlumes: true,           // add the long GACA tail plumes to the model
+  phoenixHeadLook: true,              // quick bird-like head turns on top of its idle animation
+  phoenixClips: {},                   // optional: { fly: "ClipName", idle: "ClipName", glide: "...", land: "..." }
+  snapSound: true,                    // also listen for the snap's "click" (uses your default mic)
+  snapLoudness: 1.0,                  // raise if snaps are missed, lower if other sounds trigger it
+
   // ---- eyebrow raise: the hat stands up tall until your brows come down ----
   browStand: true,
   browThreshold: 0.22,                // how far above your resting brows counts as "raised" (lower = more sensitive)
@@ -59,6 +81,7 @@ const CONFIG = {
 const FORCE_DEMO = false;
 </script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/loaders/GLTFLoader.js"></script>
 <style>
   :root { color-scheme: light;
     --bg: #EDECF6; --bg2: #FFFFFF; --panel: rgba(255,255,255,.9); --text: #0D004D; --muted: #4A4377;
@@ -118,7 +141,7 @@ const FORCE_DEMO = false;
   <div id="loading">Stitching the hat…</div>
   <header>
     <h1>Wizard hat</h1>
-    <p>Drag the head to see the hat sway. Raise your eyebrows (Brows up) to make it stand tall.</p>
+    <p>Snap to summon the phoenix. Drag the head to see it keep its balance.</p>
   </header>
   <div id="panel">
     <div class="btns">
@@ -129,6 +152,9 @@ const FORCE_DEMO = false;
       <button id="bMore" aria-expanded="false">Adjust</button>
     </div>
     <div class="btns" style="margin-top:8px">
+      <button class="act" id="bSnap">Snap 🔥</button>
+      <button class="act" id="bPFly">Fly</button>
+      <button class="act" id="bPHat">Land on hat</button>
     </div>
     <div id="more">
       <div class="swatches"><span>Hat color</span>
@@ -164,6 +190,8 @@ const DEBUG = params.has('debug');
 // no layer      -> the whole hat in one source
 const LAYER = DEMO ? null : params.get('layer');
 if (params.get('cam')) CONFIG.cameraName = params.get('cam');
+if (params.get('model')) CONFIG.phoenixModel = params.get('model');
+if (params.get('fwd')) CONFIG.phoenixModelForward = params.get('fwd');
 const IS_FRONT = LAYER === 'front', IS_BACK = LAYER === 'back';
 const sync = ('BroadcastChannel' in window) ? new BroadcastChannel('wizard-hat-sync') : null;
 let follow = null, lastMsg = -1e9;
@@ -512,7 +540,7 @@ if (DEMO) {
   shoulders.castShadow = shoulders.receiveShadow = true; torso.add(shoulders);
   const chest = new T.Mesh(new T.SphereGeometry(1, 64, 48), clay); chest.scale.set(13.5, 10, 7.2); chest.position.set(0, -27, -.6); chest.castShadow = chest.receiveShadow = true; torso.add(chest);
 } else {
-  anchorLocal = v3(0, 9.5, -3.2);      // where the crown of your head is, relative to the face tracker (as on 11/12)
+  anchorLocal = v3(0, 9.5, -3.2);      // where the crown of your head is, relative to the face tracker
   // invisible: hides only the part of the brim that's behind your head; never covers your face
   if (CONFIG.hideBrimBehindHead) { occ = new T.Mesh(new T.SphereGeometry(1, 48, 32), new T.MeshBasicMaterial({ colorWrite: false })); occ.renderOrder = -1; head.add(occ); }
 }
@@ -597,7 +625,8 @@ function buildSpine() {
     if (mag > 1e-5) dd = dir.clone().applyAxisAngle(v3(sz / mag, 0, -sx / mag), mag);
     p = p.clone().addScaledVector(dd, d.seg); local.push(p);
   }
-  const full = headQuat.clone().multiply(tilt); hatQuat.copy(full);
+  const load = (phOK && PH.brimQ) ? PH.brimQ : new T.Quaternion();          // the phoenix's weight on the brim
+  const full = headQuat.clone().multiply(load).multiply(tilt); hatQuat.copy(full);
   for (const q of local) pts.push(q.applyQuaternion(full).add(anchor));
 }
 
@@ -839,6 +868,14 @@ async function startTracking() {
         runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: .6, minHandPresenceConfidence: .5, minTrackingConfidence: .5 });
       try { handLm = await HandLandmarker.createFromOptions(files, hopts('GPU')); } catch (e) { try { handLm = await HandLandmarker.createFromOptions(files, hopts('CPU')); } catch (e2) { console.warn('[pen] hand tracker unavailable', e2); } }
     }
+    if (CONFIG.phoenix !== false && !IS_BACK) {
+      const { PoseLandmarker, HandLandmarker } = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs');
+      const po = d => ({ baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task', delegate: d }, runningMode: 'VIDEO', numPoses: 1 });
+      const ho = d => ({ baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task', delegate: d }, runningMode: 'VIDEO', numHands: 2 });
+      try { SNAP.poseLm = await PoseLandmarker.createFromOptions(files, po('GPU')); } catch (e) { try { SNAP.poseLm = await PoseLandmarker.createFromOptions(files, po('CPU')); } catch (e2) {} }
+      try { SNAP.handLm = await HandLandmarker.createFromOptions(files, ho('GPU')); } catch (e) { try { SNAP.handLm = await HandLandmarker.createFromOptions(files, ho('CPU')); } catch (e2) {} }
+      if (CONFIG.snapSound) snapListen();
+    }
     setStatus('Tracking: ' + (stream.getVideoTracks()[0].label || 'camera'));
   } catch (e) { setStatus('Face tracking unavailable: ' + (e.message || e)); }
 }
@@ -856,19 +893,28 @@ function trackPose(now) {
   lastVideoTime = video.currentTime;
   if (video.videoWidth) { const a = video.videoWidth / video.videoHeight; if (Math.abs(camera.aspect - a) > .001) { camera.aspect = a; camera.updateProjectionMatrix(); } }
   if (handLm) { try { penUpdate(handLm.detectForVideo(video, now), now); } catch (e) {} }
-  processFace(landmarker.detectForVideo(video, now), now);
+  let handRes = null;
+  SNAP.fc = (SNAP.fc || 0) + 1;
+  if (SNAP.handLm && SNAP.fc % 2 === 0) { try { handRes = SNAP.handLm.detectForVideo(video, now); if (CONFIG.phoenix !== false) snapHands(handRes, now); } catch (e) {} }
+  if (SNAP.poseLm && poseOk && SNAP.fc % 3 === 0) { try {
+    const pr = SNAP.poseLm.detectForVideo(video, now), pl = pr.landmarks && pr.landmarks[0];
+    if (pl && (pl[11].visibility ?? 1) > .4 && (pl[12].visibility ?? 1) > .4) {
+      const z = headPos.z, lift = v3(0, 3.5 * autoScale, 0);
+      const L = toCam(pl[11], z).add(lift), R = toCam(pl[12], z).add(lift), [oL, oR] = PH.shoulders;
+      PH.setShoulders(oL ? oL.lerp(L, .4) : L, oR ? oR.lerp(R, .4) : R);
+    } } catch (e) {} }
+  processFace(landmarker.detectForVideo(video, now), now, handRes);
 }
-function processFace(res, now) {
+function processFace(res, now, handRes) {
   const mats = res.facialTransformationMatrixes, lms = res.faceLandmarks;
   if (!(mats && mats.length && lms && lms.length)) return;
   _m.fromArray(mats[0].data); _m.decompose(_p, _q, _s);
   const lm = lms[0], z = Math.min(-5, _p.z), q = _q.clone();
   if (!CONFIG.autoFit) {
-    // steady tracking (as on 11/12): follow the face tracker's whole-head pose, fixed hat size
+    // steady tracking: follow the face tracker's whole-head pose, fixed hat size
     autoScale = CONFIG.fitSize; faceSize = 14.5 * CONFIG.fitSize;
     setPose(_p.clone(), q, now);
   } else {
-    // auto-fit: measure your forehead top (10), chin (152), cheek edges (234, 454); heavily smoothed
     const top = toCam(lm[10], z), chin = toCam(lm[152], z), cl = toCam(lm[234], z), cr = toCam(lm[454], z);
     const size = Math.max(cl.distanceTo(cr), top.distanceTo(chin) * .8);
     faceSize = faceSize ? faceSize + (size - faceSize) * .03 : size;
@@ -878,6 +924,7 @@ function processFace(res, now) {
     const center = top.clone().addScaledVector(up, -faceSize * .45).addScaledVector(back, faceSize * .45);
     setPose(center, q, now, anchorW);
   }
+  if (CONFIG.phoenix !== false && handRes) phSafe(() => PH.setHands(handRes.landmarks ? handRes.landmarks.map(hh => toCam(hh[9], z)) : []));
   if (occ) { occ.scale.set(faceSize * .47, faceSize * .62, faceSize * .5); occ.position.set(0, faceSize * .12, -faceSize * .12); }
   const bs = res.faceBlendshapes && res.faceBlendshapes[0];
   // eyebrow raise -> stand up (measured against your own resting brows)
@@ -1075,6 +1122,1175 @@ function penRender(dt) {
 }
 
 /* =====================================================================
+   PIXEL PHOENIX (ground-up): golden-pheasant anatomy in GACA colors.
+   Drawn as smooth shapes at sprite resolution, then snapped to 3-step
+   color ramps with a clean 1-pixel outline (classic pixel-art finish).
+   Side view, facing +x, y down. Units: B = body length in sprite pixels.
+   ===================================================================== */
+const PXB = (() => {
+  // GACA ramps: [shadow, base, light]
+  const R = {
+    fu: ['#A1239A', '#DF41CF', '#EFA0E7'],   // Fuchsia (breast, flanks, tail coverts)
+    am: ['#C79600', '#FFCE00', '#FFE67F'],   // Amber (back, rump, crest, tail)
+    or: ['#B86A00', '#FFA51F', '#FFD27A'],   // warm Amber (cape)
+    tq: ['#2A9C9B', '#56E2E1', '#B3F2F1'],   // Turquoise (mantle)
+    pu: ['#2C1670', '#512EAB', '#8E78D8'],   // Amethyst (wings)
+    li: ['#8F8CD6', '#C1BFFF', '#EDECF6'],   // Light Purple / Mist (wing edges)
+    sk: ['#B5713F', '#E3A86E', '#F2CFA6']    // bare face / legs
+  };
+  const INK = '#0D004D', EYE = '#F7F0BE';
+  const PAL = [INK, EYE, '#FFFFFF', ...Object.values(R).flat()].map(h => { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; });
+  const mix = (a, b, t) => a + (b - a) * t, cl = (v, a, b) => Math.max(a, Math.min(b, v));
+  // lit fill: light from the top-left, so each shape shades base → shadow downward
+  function lit(c, ramp, x0, y0, x1, y1) { const g = c.createLinearGradient(x0, y0, x1, y1); g.addColorStop(0, ramp[2]); g.addColorStop(.38, ramp[1]); g.addColorStop(.7, ramp[1]); g.addColorStop(1, ramp[0]); return g; }
+  function featherShape(c, x, y, ang, len, wid, tipRound = .5) {   // one feather: base at (x,y), pointing along ang
+    c.save(); c.translate(x, y); c.rotate(ang); c.beginPath();
+    c.moveTo(0, -wid * .35); c.quadraticCurveTo(len * .5, -wid * .6, len, -wid * (.5 - tipRound * .5)); c.quadraticCurveTo(len + wid * tipRound * .6, 0, len, wid * (.5 - tipRound * .5));
+    c.quadraticCurveTo(len * .5, wid * .6, 0, wid * .35); c.closePath(); c.restore();
+  }
+  function fillFeather(c, x, y, ang, len, wid, ramp, opts = {}) {
+    featherShape(c, x, y, ang, len, wid, opts.round ?? .5);
+    c.fillStyle = lit(c, ramp, x, y - wid, x, y + wid); c.fill();
+    if (opts.edge) { c.save(); featherShape(c, x, y, ang, len, wid, opts.round ?? .5); c.clip(); c.translate(x, y); c.rotate(ang); c.fillStyle = opts.edge; c.fillRect(len * .78, -wid, len, wid * 2); c.restore(); }
+    if (opts.bars) { c.save(); featherShape(c, x, y, ang, len, wid, opts.round ?? .5); c.clip(); c.translate(x, y); c.rotate(ang); c.fillStyle = INK;
+      for (let k = 0; k < opts.bars; k++) c.fillRect(len * (.25 + .65 * k / opts.bars), -wid, Math.max(1, len * .045), wid * 2); c.restore(); }
+  }
+
+  /* ---------- the wing: shoulder → elbow → wrist, with real feather tracts ---------- */
+  // pose: elev (wing raised + / lowered −, radians), flex (0 spread … 1 folded at the wrist), fold (0 open … 1 tucked on the body), sweep (landing: wing forward)
+  // ONE living wing shape, redrawn every frame from a 3D bone model projected into the side view.
+  // Raised or lowered wings look tall; wings sweeping past the body foreshorten, like real birds seen from the side.
+  function wingGeom(B, w, far) {
+    const sgn = far ? -1 : 1, open = 1 - w.fold, ease = open * open * (3 - 2 * open);
+    const phi = (w.elev || 0) * ease + mix(.1, 0, ease);                  // elevation around the body axis
+    const u = [0, Math.sin(phi), Math.cos(phi) * sgn];                    // span direction (3D: x fwd, y up, z toward camera)
+    const back = [-1, 0, 0];
+    const dirAt = beta => { const c = Math.cos(beta), s = Math.sin(beta); return [u[0] * c + back[0] * s, u[1] * c + back[1] * s, u[2] * c + back[2] * s]; };
+    // bone sweep: folded wings point straight back along the body; the upstroke flexes elbow and wrist
+    const b1 = mix(1.45, .12 - (w.sweep || 0) * .35, ease), b2 = mix(1.52, b1 + .2 + w.flex * .8, ease), b3 = mix(1.56, b2 + .3 + w.flex * 1.2, ease);
+    const S = [B * .12, B * .12, 0], L = [B * mix(.17, .23, ease), B * mix(.2, .36, ease), B * mix(.22, .42, ease)];
+    const d1 = dirAt(b1), d2 = dirAt(b2), d3 = dirAt(b3);
+    const E = S.map((v, i) => v + d1[i] * L[0]), Wr = E.map((v, i) => v + d2[i] * L[1]), Tp = Wr.map((v, i) => v + d3[i] * L[2]);
+    const N = 26, LE = [], TE = [], tips = [];
+    for (let k = 0; k <= N; k++) {
+      const s = k / N; let p, d;
+      if (s < .25) { const t = s / .25; p = S.map((v, i) => v + (E[i] - v) * t); d = d1; }
+      else if (s < .6) { const t = (s - .25) / .35; p = E.map((v, i) => v + (Wr[i] - v) * t); d = d2; }
+      else { const t = (s - .6) / .4; p = Wr.map((v, i) => v + (Tp[i] - v) * t); d = d3; }
+      // chord: the part of "backward" that is perpendicular to the bone (feathers trail behind it)
+      const dot = back[0] * d[0] + back[1] * d[1] + back[2] * d[2]; let ch = [back[0] - d[0] * dot, back[1] - d[1] * dot, back[2] - d[2] * dot];
+      const cl0 = Math.hypot(...ch) || 1; ch = ch.map(v => v / cl0);
+      // a folded wing lies flat on the flank: its feathers hang down and back over the side
+      const fch = [-.45, -1, 0], fl = Math.hypot(...fch); ch = ch.map((v, i) => mix(fch[i] / fl, v, ease)); const cl1 = Math.hypot(...ch) || 1; ch = ch.map(v => v / cl1);
+      const chord = B * mix(.26 - s * .08, (s < .25 ? .34 + s * .4 : s < .6 ? .48 : .5 + (s - .6) * .5) * 1.08, ease) * (s > .92 ? 1 - (s - .92) * 6 : 1);
+      // the hand's primaries fan toward the tip (the trailing edge sweeps out), and their tips flutter a little
+      const fan = s > .6 ? (s - .6) / .4 * .55 * ease * (1 - w.flex * .6) : 0;
+      const tdir = ch.map((v, i) => v * (1 - fan) + d[i] * fan); const tl = Math.hypot(...tdir) || 1;
+      const flutter = s > .6 ? Math.sin((w.t || 0) * 13 + k) * .025 * (w.amp || 0) : 0;
+      const T = p.map((v, i) => v + tdir[i] / tl * chord * (1 + flutter));
+      LE.push({ x: p[0], y: -p[1] }); TE.push({ x: T[0], y: -T[1] }); tips.push(s);
+    }
+    return { LE, TE, tips, ease, tip: { x: Tp[0], y: -Tp[1] } };
+  }
+  function wing(c, B, w, far) {
+    const g = wingGeom(B, w, far), { LE, TE } = g, n = LE.length;
+    const rp = far ? [R.pu[0], R.pu[0], R.pu[1]] : R.pu, rl = far ? [R.li[0], R.li[0], R.li[1]] : R.li;
+    // silhouette: leading edge out to the tip, then back along a scalloped feather edge
+    const path = () => { c.beginPath(); c.moveTo(LE[0].x, LE[0].y);
+      for (let k = 1; k < n - 1; k++) c.quadraticCurveTo(LE[k].x, LE[k].y, (LE[k].x + LE[k + 1].x) / 2, (LE[k].y + LE[k + 1].y) / 2); c.lineTo(LE[n - 1].x, LE[n - 1].y);
+      for (let k = n - 1; k > 0; k--) { const a = TE[k], b = TE[k - 1], mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, ox = (mx - LE[k].x) * .06, oy = (my - LE[k].y) * .06;
+        c.quadraticCurveTo(a.x + ox, a.y + oy, mx, my); }
+      c.lineTo(TE[0].x, TE[0].y); c.closePath(); };
+    let minY = 1e9, maxY = -1e9; LE.concat(TE).forEach(p => { minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); });
+    path(); c.fillStyle = lit(c, rp, 0, minY, 0, maxY); c.fill();
+    c.save(); path(); c.clip();
+    // light feather edges along the trailing edge
+    c.strokeStyle = rl[1]; c.lineWidth = Math.max(1, B * .035); c.beginPath(); TE.forEach((p, k) => k ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)); c.stroke();
+    // covert band: a lighter strip that follows the leading edge
+    c.beginPath(); LE.forEach((p, k) => k ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y));
+    for (let k = n - 1; k >= 0; k--) { const p = LE[k], q = TE[k]; c.lineTo(p.x + (q.x - p.x) * .34, p.y + (q.y - p.y) * .34); }
+    c.closePath(); c.fillStyle = far ? R.pu[1] : rl[1]; c.globalAlpha = .55; c.fill(); c.globalAlpha = 1;
+    for (const f of [.12, .24]) for (let k = 1; k < n - 1; k++) { const p = LE[k], q = TE[k], x = p.x + (q.x - p.x) * f, y = p.y + (q.y - p.y) * f;
+      c.strokeStyle = far ? R.pu[0] : R.pu[0]; c.lineWidth = 1; c.beginPath(); c.arc(x, y, Math.max(1.2, B * .022), 0, Math.PI); c.stroke(); }
+    // feather lines: run from the covert band to the trailing edge, so they bend and stretch with the wing
+    c.strokeStyle = R.pu[0]; c.lineWidth = 1;
+    for (let k = 1; k < n - 1; k += 1) { const p = LE[k], q = TE[k]; c.beginPath(); c.moveTo(p.x + (q.x - p.x) * .36, p.y + (q.y - p.y) * .36); c.lineTo(q.x, q.y); c.stroke(); }
+    c.restore();
+    // leading edge (the arm), thicker when spread
+    c.lineCap = 'round'; c.strokeStyle = far ? R.pu[0] : R.pu[1]; c.lineWidth = Math.max(1.5, B * .06);
+    c.beginPath(); c.moveTo(LE[0].x, LE[0].y); for (let k = 1; k < n * .62 - 1; k++) c.quadraticCurveTo(LE[k].x, LE[k].y, (LE[k].x + LE[k + 1].x) / 2, (LE[k].y + LE[k + 1].y) / 2); c.stroke();
+    return { tip: g.tip };
+  }
+
+  /* ---------- the whole bird ---------- */
+  // P: { B, t, perch, elev, flex, fold, sweep, neck (0 tucked … 1 stretched), headDX, headDY, headTilt, crestSway, tailBend[], tailFan, legs (0 tucked … 1 down), legReach, blink, pitch }
+  function draw(c, P) {
+    const B = P.B, t = P.t, pk = P.perchK ?? (P.perch ? 1 : 0);
+    c.save(); c.rotate(P.pitch || 0);
+    const farW = wing(c, B, { elev: P.elev * .9, flex: P.flex, fold: P.fold, sweep: P.sweep, t, amp: P.amp || 0 }, true);
+    c.translate(0, 0);
+    // tail: three long feathers on a smooth, gently S-curved spine; they swell, taper to soft rounded tips, and fan apart a little toward the end
+    const tailBase = { x: -B * .34, y: -B * .05 };
+    const segs = 9, segL = B * .22, bends = P.tailBend || [];
+    const ctrl = [tailBase]; const ang0 = Math.PI - mix(.1, .5, pk) - (P.tailDroop || 0); let ang = ang0;
+    for (let i = 0; i < segs; i++) { ang -= (bends[i] || 0) + .035 * pk + Math.sin(i / segs * Math.PI) * .03; const p = ctrl[i]; ctrl.push({ x: p.x + Math.cos(ang) * segL, y: p.y + Math.sin(ang) * segL }); }
+    // smooth the spine (Catmull-Rom) so there are no corners anywhere along it
+    const spine = [], SN = 48;
+    for (let k = 0; k <= SN; k++) { const f = k / SN * segs, i = Math.min(segs - 1, Math.floor(f)), t = f - i;
+      const p0 = ctrl[Math.max(0, i - 1)], p1 = ctrl[i], p2 = ctrl[i + 1], p3 = ctrl[Math.min(segs, i + 2)], t2 = t * t, t3 = t2 * t;
+      const cr = (a, b, cc, d) => .5 * (2 * b + (-a + cc) * t + (2 * a - 5 * b + 4 * cc - d) * t2 + (-a + 3 * b - 3 * cc + d) * t3);
+      spine.push({ x: cr(p0.x, p1.x, p2.x, p3.x), y: cr(p0.y, p1.y, p2.y, p3.y) }); }
+    const at = (u, side, spread) => {            // a point on the spine, pushed sideways (side) with a spread that grows toward the tip
+      const f = u * SN, i = Math.min(SN - 1, Math.floor(f)), t = f - i, p = spine[i], q = spine[i + 1];
+      const dx = q.x - p.x, dy = q.y - p.y, L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L, off = side * B * spread * u * u;
+      return { x: p.x + (q.x - p.x) * t + nx * off, y: p.y + (q.y - p.y) * t + ny * off, nx, ny, tx: dx / L, ty: dy / L };
+    };
+    const tailFeather = (side, spread, lenMul, widMul, ramp, bars) => {
+      const M = 30, L = [], Rr = [];
+      for (let k = 0; k <= M; k++) { const u = k / M * lenMul, a = at(u, side, spread), v = k / M;
+        const w = B * .07 * widMul * (.75 + .45 * Math.sin(Math.min(1, v * 1.15) * Math.PI * .85)) * (1 - Math.pow(v, 6));   // swell, then taper
+        L.push({ x: a.x + a.nx * w, y: a.y + a.ny * w }); Rr.push({ x: a.x - a.nx * w, y: a.y - a.ny * w }); }
+      const tipA = at(lenMul, side, spread);
+      const path = () => { c.beginPath(); c.moveTo(L[0].x, L[0].y);
+        for (let k = 1; k < L.length - 1; k++) c.quadraticCurveTo(L[k].x, L[k].y, (L[k].x + L[k + 1].x) / 2, (L[k].y + L[k + 1].y) / 2);
+        const e = L[L.length - 1]; c.quadraticCurveTo(tipA.x + tipA.tx * B * .05, tipA.y + tipA.ty * B * .05, Rr[Rr.length - 1].x, Rr[Rr.length - 1].y);   // soft round tip
+        for (let k = Rr.length - 2; k > 0; k--) c.quadraticCurveTo(Rr[k].x, Rr[k].y, (Rr[k].x + Rr[k - 1].x) / 2, (Rr[k].y + Rr[k - 1].y) / 2);
+        c.lineTo(Rr[0].x, Rr[0].y); c.closePath(); };
+      path(); c.fillStyle = lit(c, ramp, 0, tailBase.y - B * .1, 0, tailBase.y + B * .4); c.fill();
+      if (bars) { c.save(); path(); c.clip(); c.strokeStyle = INK; c.lineWidth = Math.max(1, B * .028);
+        for (let k = 3; k < L.length - 2; k += 2) { const a = L[k], b = Rr[k], m = at(k / (L.length - 1) * lenMul, side, spread);
+          // a soft crescent band across the feather, bowing toward the tip
+          c.beginPath(); c.moveTo(a.x, a.y); c.quadraticCurveTo(m.x + m.tx * B * .05, m.y + m.ty * B * .05, b.x, b.y); c.stroke(); }
+        c.restore(); }
+      // shaft: a thin light line down the middle
+      c.strokeStyle = ramp[2]; c.lineWidth = 1; c.beginPath(); for (let k = 0; k <= 20; k++) { const m = at(k / 20 * lenMul * .95, side, spread); k ? c.lineTo(m.x, m.y) : c.moveTo(m.x, m.y); } c.stroke();
+    };
+    const fan = .25 + P.tailFan * .35;
+    tailFeather(1, fan, .7, .85, R.am, true); tailFeather(-1, fan, .66, .85, R.am, true);
+    tailFeather(0, 0, 1, 1.15, R.am, true);
+    // tail coverts: soft curved Fuchsia plumes over the tail base
+    tailFeather(1, .5, .28, .6, R.fu, false); tailFeather(-1, .45, .25, .6, R.fu, false); tailFeather(0, 0, .33, .7, R.fu, false);
+    // legs
+    if (P.legs > .05) { c.lineCap = 'round'; c.strokeStyle = R.sk[1]; c.lineWidth = Math.max(1.5, B * .045);
+      for (const lx of [-.02, .07]) { const kx = B * (lx + .04 + P.legReach * .12), ky = B * mix(.18, .3, P.legs), fy = B * mix(.2, .44, P.legs);
+        c.beginPath(); c.moveTo(B * lx, B * .16); c.quadraticCurveTo(kx, ky, B * (lx + P.legReach * .18), fy); c.stroke();
+        c.strokeStyle = R.sk[0]; c.beginPath(); c.moveTo(B * (lx - .06 + P.legReach * .18), fy); c.lineTo(B * (lx + .1 + P.legReach * .18), fy); c.stroke(); c.strokeStyle = R.sk[1]; } }
+    // body: plump breast, golden back, flank spikes
+    const body = () => { c.beginPath(); c.moveTo(B * .3, -B * .06); c.bezierCurveTo(B * .34, B * .1, B * .2, B * .22, -B * .02, B * .22);
+      c.bezierCurveTo(-B * .2, B * .22, -B * .36, B * .12, -B * .4, -B * .02); c.bezierCurveTo(-B * .36, -B * .14, -B * .18, -B * .2, B * .02, -B * .2);
+      c.bezierCurveTo(B * .16, -B * .2, B * .27, -B * .16, B * .3, -B * .06); c.closePath(); };
+    const br = 1 + Math.sin(t * 2.4) * .025 * (.4 + pk * .6) + (P.elev || 0) * .03 * (1 - pk) * (P.amp || 0);
+    c.save(); c.scale(1, br); body(); c.fillStyle = lit(c, R.fu, 0, -B * .2, 0, B * .22); c.fill(); c.restore();
+    c.save(); body(); c.clip();
+    c.fillStyle = lit(c, R.am, 0, -B * .22, 0, -B * .02); c.beginPath(); c.ellipse(-B * .12, -B * .2, B * .3, B * .12, -.05, 0, 7); c.fill();           // golden back
+    c.fillStyle = lit(c, R.tq, 0, -B * .22, 0, -B * .08); c.beginPath(); c.ellipse(B * .1, -B * .17, B * .14, B * .07, -.3, 0, 7); c.fill();          // mantle
+    for (let k = 0; k < 7; k++) { c.strokeStyle = k % 2 ? R.fu[0] : R.fu[2]; c.lineWidth = 1; c.beginPath(); c.moveTo(-B * (.02 + k * .045), B * .05); c.lineTo(-B * (.12 + k * .045), B * .17); c.stroke(); }   // flank streaks
+    const sc = Math.max(2.2, B * .055);
+    for (let row = 0; row < 7; row++) for (let col = 0; col < 9; col++) {                 // breast feather scallops
+      const x = B * .3 - col * sc * 1.25 - (row % 2) * sc * .6, y = -B * .04 + row * sc * .85; if (x < -B * .1) continue;
+      c.strokeStyle = R.fu[0]; c.lineWidth = 1; c.beginPath(); c.arc(x, y, sc * .55, .2, Math.PI - .2); c.stroke(); }
+    for (let row = 0; row < 3; row++) for (let col = 0; col < 8; col++) {                 // golden back scallops
+      const x = -B * .02 - col * sc * 1.3 - (row % 2) * sc * .6, y = -B * .2 + row * sc * .7;
+      c.strokeStyle = R.am[0]; c.lineWidth = 1; c.beginPath(); c.arc(x, y, sc * .5, .2, Math.PI - .2); c.stroke(); }
+    c.restore();
+    // near wing over the body
+    const nearW = wing(c, B, { elev: P.elev, flex: P.flex, fold: P.fold, sweep: P.sweep, t, amp: P.amp || 0 }, false);
+    // neck + head (the neck stretches forward in flight)
+    const nb = { x: B * .22, y: -B * .12 }, hd = { x: B * mix(.36, .5, P.neck) + (P.headDX || 0), y: B * mix(-.36, -.16, P.neck) + (P.headDY || 0) };
+    c.beginPath(); c.moveTo(nb.x - B * .1, nb.y - B * .06); c.quadraticCurveTo(nb.x + B * .02, hd.y + B * .02, hd.x - B * .04, hd.y - B * .04);
+    c.lineTo(hd.x + B * .03, hd.y + B * .06); c.quadraticCurveTo(nb.x + B * .12, nb.y + B * .04, nb.x + B * .06, nb.y + B * .1); c.closePath();
+    c.fillStyle = lit(c, R.fu, nb.x, hd.y, nb.x, nb.y + B * .1); c.fill();
+    // cape: overlapping barred feathers fanning from the back of the head over the neck
+    { const sway = (P.crestSway || 0) * .3, top = [], bot = [], M = 10;
+      for (let k = 0; k <= M; k++) { const u = k / M, ang = Math.PI * .62 + u * .55 + sway + Math.sin(t * 2.2 - u * 3) * .06;
+        const r0 = B * .05, r1 = B * (.2 + .05 * Math.sin(u * Math.PI)) * (1 + .04 * Math.sin(t * 3 + u * 6));
+        top.push({ x: hd.x + Math.cos(ang) * r0, y: hd.y + Math.sin(ang) * r0 }); bot.push({ x: hd.x + Math.cos(ang) * r1, y: hd.y + Math.sin(ang) * r1 }); }
+      const cape = () => { c.beginPath(); top.forEach((p, k) => k ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y));
+        for (let k = bot.length - 1; k > 0; k--) { const a = bot[k], b = bot[k - 1]; c.quadraticCurveTo(a.x + (a.x - hd.x) * .08, a.y + (a.y - hd.y) * .08, (a.x + b.x) / 2, (a.y + b.y) / 2); } c.closePath(); };
+      cape(); c.fillStyle = lit(c, R.or, 0, hd.y - B * .1, 0, hd.y + B * .2); c.fill();
+      c.save(); cape(); c.clip(); c.strokeStyle = INK; c.lineWidth = Math.max(1, B * .03);
+      for (const f of [.55, .78, .95]) { c.beginPath(); top.forEach((p, k) => { const q = bot[k], x = p.x + (q.x - p.x) * f, y = p.y + (q.y - p.y) * f; k ? c.lineTo(x, y) : c.moveTo(x, y); }); c.stroke(); }
+      c.restore(); }
+    // head
+    c.save(); c.translate(hd.x, hd.y); c.rotate(P.headTilt || 0);
+    c.beginPath(); c.ellipse(0, 0, B * .1, B * .085, 0, 0, 7); c.fillStyle = lit(c, R.am, 0, -B * .09, 0, B * .08); c.fill();
+    c.beginPath(); c.ellipse(B * .035, B * .022, B * .05, B * .04, 0, 0, 7); c.fillStyle = R.sk[1]; c.fill();                         // bare face
+    // silky crest swept back over the nape
+    c.beginPath(); c.moveTo(B * .06, -B * .06); c.quadraticCurveTo(-B * .06, -B * .13, -B * (.2 + (P.crestSway || 0) * .03 + Math.sin(t * 1.7) * .012), -B * .02 + ((P.crestSway || 0) * .03 + Math.sin(t * 1.7 + 1) * .012) * B);
+    c.quadraticCurveTo(-B * .06, -B * .02, -B * .02, B * .0); c.closePath(); c.fillStyle = lit(c, R.am, 0, -B * .1, 0, 0); c.fill();
+    // hooked beak + pale eye
+    c.beginPath(); c.moveTo(B * .085, -B * .014); c.quadraticCurveTo(B * .155, -B * .012, B * .16, B * .03); c.lineTo(B * .09, B * .022); c.closePath(); c.fillStyle = R.sk[2]; c.fill();
+    if (P.blink > 0) { c.fillStyle = R.sk[0]; c.fillRect(B * .025, -B * .012, B * .03, Math.max(1, B * .012)); }
+    else { c.fillStyle = R.sk[0]; c.beginPath(); c.arc(B * .04, -B * .008, Math.max(1.6, B * .03), 0, 7); c.fill(); c.fillStyle = EYE; c.beginPath(); c.arc(B * .04, -B * .008, Math.max(1.2, B * .022), 0, 7); c.fill(); c.fillStyle = INK; c.beginPath(); c.arc(B * .045, -B * .008, Math.max(.8, B * .011), 0, 7); c.fill(); }
+    c.restore();
+    c.restore();
+    return { farTip: farW.tip, nearTip: nearW.tip, tailTip: spine[spine.length - 1] };
+  }
+
+  /* ---------- pixel-art finish: snap to ramps, hard alpha, 1-px outline ---------- */
+  const CACHE = new Map();
+  function finish(c, w, h) {
+    const img = c.getImageData(0, 0, w, h), d = img.data, solid = new Uint8Array(w * h);
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+      if (d[i + 3] < 128) { d[i + 3] = 0; continue; }
+      const key = (d[i] >> 2) << 12 | (d[i + 1] >> 2) << 6 | (d[i + 2] >> 2) | (d[i + 3] > 250 ? 1 << 18 : 0);
+      let best = CACHE.get(key);
+      if (best === undefined) { const a = d[i + 3] / 255, r = d[i] / a, g = d[i + 1] / a, b = d[i + 2] / a; let bd = 1e9; best = 0;
+        for (let k = 0; k < PAL.length; k++) { const q = PAL[k], dd = (q[0] - r) ** 2 * .3 + (q[1] - g) ** 2 * .59 + (q[2] - b) ** 2 * .11; if (dd < bd) { bd = dd; best = k; } }
+        if (CACHE.size < 200000) CACHE.set(key, best); }
+      d[i] = PAL[best][0]; d[i + 1] = PAL[best][1]; d[i + 2] = PAL[best][2]; d[i + 3] = 255; solid[p] = 1;
+    }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {      // outline: empty pixels touching the bird become dark
+      const p = y * w + x; if (solid[p]) continue;
+      if ((x > 0 && solid[p - 1]) || (x < w - 1 && solid[p + 1]) || (y > 0 && solid[p - w]) || (y < h - 1 && solid[p + w])) { d[p * 4] = 13; d[p * 4 + 1] = 0; d[p * 4 + 2] = 77; d[p * 4 + 3] = 255; }
+    }
+    c.putImageData(img, 0, 0);
+  }
+  return { draw, finish, R };
+})();
+
+/* =====================================================================
+   PHOENIX FAMILIAR (v2): an anatomical, textured 3D bird in the hat's
+   scene: same lights, shadows and layers. Perches on your shoulder or
+   the hat brim and never flies through the hat.
+   ===================================================================== */
+// If anything in the phoenix ever fails, it switches itself off and the hat keeps running.
+let phOK = true;
+const PH_STUB = { ON: false, update() {}, toggle() {}, takeOff() {}, land() {}, setShoulders() {}, setHands() {}, hide() {}, exportState() { return null; }, importState() {},
+  brimQ: new T.Quaternion(), st: { visible: false, mode: 'perch' }, shoulders: [] };
+function phSafe(fn) {
+  if (!phOK) return undefined;
+  try { return fn(); } catch (e) { phOK = false; console.warn('[phoenix] switched off after an error; the hat keeps running.', e); try { PH.hide(); } catch (_) {} return undefined; }
+}
+const PH = (() => { try { return (() => {
+  const ON = CONFIG.phoenix !== false, PIXEL = CONFIG.phoenixStyle === 'pixel';
+  const rnd2 = (a, b) => a + Math.random() * (b - a), cl = (v, a, b) => Math.max(a, Math.min(b, v)), mix = (a, b, t) => a + (b - a) * t;
+  const ease = t => t * t * (3 - 2 * t);
+  const X1 = v3(1, 0, 0), UP = v3(0, 1, 0);
+  const lin = hex => new T.Color(hex).convertSRGBToLinear();
+  const HEX = { f: '#DF41CF', ft: '#EFA0E7', a: '#FFCE00', at: '#FFE67F', t: '#56E2E1', tt: '#B3F2F1', am: '#512EAB', l: '#C1BFFF', ink: '#0D004D' };
+
+  /* =========================== TEXTURES =========================== */
+  let fseed = 11; const fr = () => (fseed = (fseed * 16807) % 2147483647) / 2147483647;
+  // a single feather, base at the bottom, tip at the top. Two-tone vanes, dark tips, bars, eyes, or silky filaments.
+  function featherTex({ w = 128, h = 512, base, inner, outer, tip, tipDark = null, tipLen = .14, bars = 0, barCol = '#0D004D', eye = false, down = .18, vane = .46, asym = .78, filament = false, seed = 1 }) {
+    fseed = seed * 977 + 13; inner = inner || base; outer = outer || inner; tip = tip || inner;
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h; const c = cv.getContext('2d');
+    const cx = w / 2, half = y => { const t = 1 - y / h; return Math.pow(Math.sin(Math.PI * Math.min(1, t * 1.05)), .55) * (t < .08 ? t / .08 : 1) * w * vane; };
+    if (filament) {        // silky crest strands: many fine hairs, no solid vane
+      for (let k = 0; k < 70; k++) { const sd = fr() < .5 ? -1 : 1, x0 = cx + (fr() - .5) * 4, spread = fr() * w * .42 * sd;
+        const g = c.createLinearGradient(0, h, 0, 0); g.addColorStop(0, base); g.addColorStop(.6, inner); g.addColorStop(1, tip);
+        c.strokeStyle = g; c.globalAlpha = .45 + fr() * .5; c.lineWidth = .8 + fr() * 1.4;
+        c.beginPath(); c.moveTo(x0, h); c.bezierCurveTo(x0 + spread * .2, h * .6, x0 + spread * .8, h * .3, x0 + spread, h * (fr() * .12)); c.stroke(); }
+      c.globalAlpha = 1; const t = new T.CanvasTexture(cv); t.encoding = T.sRGBEncoding; t.anisotropy = 8; return t;
+    }
+    // each half of the vane gets its own color (like real two-tone flight feathers)
+    for (const [sd, col] of [[1, outer], [-1, inner]]) {
+      c.beginPath(); c.moveTo(cx, h);
+      for (let y = h; y >= 0; y -= 4) c.lineTo(cx + sd * half(y) * (sd < 0 ? asym : 1), y);
+      c.lineTo(cx, 0); c.closePath();
+      const g = c.createLinearGradient(0, h, 0, 0); g.addColorStop(0, base); g.addColorStop(.35, col); g.addColorStop(1 - tipLen, col); g.addColorStop(1, tipDark || tip);
+      c.fillStyle = g; c.fill();
+    }
+    c.save(); c.beginPath(); c.moveTo(cx, h); for (let y = h; y >= 0; y -= 4) c.lineTo(cx + half(y), y); for (let y = 0; y <= h; y += 4) c.lineTo(cx - half(y) * asym, y); c.closePath(); c.clip();
+    // dark chevron bars that follow the barbs (pheasant cape and tail)
+    for (let b = 0; b < bars; b++) { const y = h * (.2 + .72 * (b + .5) / bars), bw = h / bars * .32;
+      c.fillStyle = barCol; c.globalAlpha = .88; c.beginPath(); c.moveTo(0, y + w * .38); c.lineTo(cx, y); c.lineTo(w, y + w * .38); c.lineTo(w, y + w * .38 + bw); c.lineTo(cx, y + bw); c.lineTo(0, y + w * .38 + bw); c.closePath(); c.fill(); c.globalAlpha = 1; }
+    // barbs: fine angled strands from the shaft to the edge
+    for (let y = h; y > 0; y -= 2) {
+      const hw = half(y); if (hw < 1) continue;
+      for (const sd of [1, -1]) {
+        const len = hw * (sd < 0 ? asym : 1), dy = -len * .55;
+        c.strokeStyle = fr() < .5 ? `rgba(255,255,255,${.05 + fr() * .1})` : `rgba(15,0,35,${.08 + fr() * .14})`; c.lineWidth = .6 + fr() * .6;
+        c.beginPath(); c.moveTo(cx, y); c.quadraticCurveTo(cx + sd * len * .5, y + dy * .4, cx + sd * len, y + dy); c.stroke();
+      }
+    }
+    const eg = c.createLinearGradient(0, 0, w, 0); eg.addColorStop(0, 'rgba(0,0,0,.22)'); eg.addColorStop(.5, 'rgba(0,0,0,0)'); eg.addColorStop(1, 'rgba(0,0,0,.16)');
+    c.fillStyle = eg; c.fillRect(0, 0, w, h);
+    if (eye) { const ey = h * .12, rx = w * .36, ry = h * .075;
+      for (const [k, col] of [[1, HEX.t], [.78, HEX.am], [.55, HEX.a], [.3, HEX.ink]]) { c.fillStyle = col; c.beginPath(); c.ellipse(cx, ey, rx * k, ry * k, 0, 0, 7); c.fill(); }
+      c.fillStyle = 'rgba(255,255,255,.35)'; c.beginPath(); c.ellipse(cx - rx * .12, ey - ry * .15, rx * .1, ry * .12, 0, 0, 7); c.fill(); }
+    c.restore();
+    c.globalCompositeOperation = 'destination-out';
+    for (let k = 0; k < 6; k++) { const y = h * (.15 + fr() * .7), hw = half(y), sd = fr() < .5 ? 1 : -1;
+      c.lineWidth = 1.2 + fr() * 1.8; c.beginPath(); c.moveTo(cx + sd * hw * 1.05, y - hw * .55); c.lineTo(cx + sd * hw * (.3 + fr() * .4), y); c.stroke(); }
+    c.fillStyle = 'rgba(0,0,0,.45)'; c.fillRect(0, h * (1 - down * .4), w, h * down * .4);
+    c.globalCompositeOperation = 'source-over';
+    for (let k = 0; k < 36; k++) { const y = h * (1 - fr() * down), x = cx + (fr() - .5) * w * .7;
+      c.strokeStyle = `rgba(255,240,250,${.12 + fr() * .22})`; c.lineWidth = .8; c.beginPath(); c.moveTo(cx, y + 6); c.quadraticCurveTo((cx + x) / 2, y - 8, x, y - 10 - fr() * 20); c.stroke(); }
+    const sg = c.createLinearGradient(0, h, 0, 0); sg.addColorStop(0, 'rgba(255,245,230,.9)'); sg.addColorStop(1, 'rgba(255,245,230,.2)');
+    c.strokeStyle = sg; c.lineWidth = Math.max(1.4, w * .02); c.beginPath(); c.moveTo(cx, h); c.quadraticCurveTo(cx + w * .02, h * .5, cx, h * (eye ? .2 : .03)); c.stroke();
+    const tex = new T.CanvasTexture(cv); tex.encoding = T.sRGBEncoding; tex.anisotropy = 8; return tex;
+  }
+  // rounded scale feather with a dark rim (iridescent mantle, small coverts)
+  function scaleTex(center, edge, rim) {
+    const S = 128, cv = document.createElement('canvas'); cv.width = S; cv.height = S; const c = cv.getContext('2d');
+    c.beginPath(); c.moveTo(S * .2, S); c.quadraticCurveTo(S * .02, S * .35, S * .5, S * .04); c.quadraticCurveTo(S * .98, S * .35, S * .8, S); c.closePath();
+    const g = c.createRadialGradient(S * .5, S * .45, 2, S * .5, S * .55, S * .55); g.addColorStop(0, center); g.addColorStop(.8, edge); g.addColorStop(1, rim);
+    c.fillStyle = g; c.fill(); c.strokeStyle = rim; c.lineWidth = S * .05; c.stroke();
+    c.save(); c.clip(); for (let k = -12; k <= 12; k++) { c.strokeStyle = `rgba(255,255,255,${.06 + Math.random() * .06})`; c.lineWidth = 1; c.beginPath(); c.moveTo(S * .5, S); c.lineTo(S * .5 + k * S * .045, S * .05); c.stroke(); } c.restore();
+    const t = new T.CanvasTexture(cv); t.encoding = T.sRGBEncoding; t.anisotropy = 8; return t;
+  }
+  // dense, hair-fine body plumage (breast, neck, back), with a streaky normal map
+  function plumageTex(top, bottom) {
+    const S = 512, cv = document.createElement('canvas'); cv.width = cv.height = S; const c = cv.getContext('2d');
+    const hc = document.createElement('canvas'); hc.width = hc.height = S; const hx = hc.getContext('2d');
+    const g = c.createLinearGradient(0, 0, 0, S); g.addColorStop(0, top); g.addColorStop(.45, top); g.addColorStop(.62, bottom); g.addColorStop(1, bottom);
+    c.fillStyle = g; c.fillRect(0, 0, S, S); hx.fillStyle = '#777'; hx.fillRect(0, 0, S, S);
+    fseed = 77;
+    for (let k = 0; k < 9000; k++) {
+      const x = fr() * S, y = fr() * S, L = 6 + fr() * 16, a = Math.PI / 2 + (fr() - .5) * .5;
+      const x2 = x + Math.cos(a) * L, y2 = y + Math.sin(a) * L, light = fr() < .5;
+      for (const dx of [-S, 0, S]) {
+        c.strokeStyle = light ? `rgba(255,255,255,${.05 + fr() * .09})` : `rgba(25,0,30,${.06 + fr() * .12})`; c.lineWidth = .6 + fr() * .8;
+        c.beginPath(); c.moveTo(x + dx, y); c.lineTo(x2 + dx, y2); c.stroke();
+        hx.strokeStyle = light ? 'rgba(255,255,255,.35)' : 'rgba(0,0,0,.35)'; hx.lineWidth = 1; hx.beginPath(); hx.moveTo(x + dx, y); hx.lineTo(x2 + dx, y2); hx.stroke();
+      }
+    }
+    const tex = new T.CanvasTexture(cv); tex.encoding = T.sRGBEncoding; tex.wrapS = tex.wrapT = T.RepeatWrapping; tex.anisotropy = 8;
+    const hd = hx.getImageData(0, 0, S, S).data, hf = new Float32Array(S * S); for (let i = 0; i < S * S; i++) hf[i] = hd[i * 4] / 255;
+    const nm = new T.CanvasTexture(heightToNormal(hf, S, S, 1.6)); nm.wrapS = nm.wrapT = T.RepeatWrapping;
+    return { tex, nm };
+  }
+  const TX = {
+    strand: featherTex({ w: 64, h: 512, base: '#FFB300', inner: HEX.a, tip: HEX.at, filament: true, seed: 4 }),
+    plume: featherTex({ w: 96, h: 1024, base: HEX.f, inner: HEX.a, outer: HEX.am, tip: HEX.f, vane: .32, asym: .95, eye: true, down: .05, seed: 6 })
+  };
+
+  /* =========================== MATERIALS =========================== */
+  const featherMat = (map, extra = {}) => new T.MeshPhysicalMaterial(Object.assign({ map, alphaTest: .42, side: T.DoubleSide, roughness: .62, metalness: 0,
+    sheen: .55, sheenRoughness: .4, sheenColor: lin(HEX.at).multiplyScalar(.3), emissive: lin('#ffffff'), emissiveMap: map, emissiveIntensity: .08, envMapIntensity: .5 }, extra));
+  const M = { strand: featherMat(TX.strand, { alphaTest: .2, emissiveIntensity: .2 }), plume: featherMat(TX.plume, { emissiveIntensity: .18 }) };
+  const beakM = new T.MeshPhysicalMaterial({ color: lin('#F2D9A6'), roughness: .3, clearcoat: 1, clearcoatRoughness: .12, envMapIntensity: .9 });
+  const eyeM = new T.MeshPhysicalMaterial({ color: lin('#120022'), roughness: .05, clearcoat: 1, clearcoatRoughness: .03, envMapIntensity: 1.3 });
+  const irisM = new T.MeshPhysicalMaterial({ color: lin('#F7F0BE'), roughness: .15, clearcoat: 1, clearcoatRoughness: .05 });
+  const legM = new T.MeshPhysicalMaterial({ color: lin('#C99A00'), roughness: .55, clearcoat: .3 });
+  const clawM = new T.MeshPhysicalMaterial({ color: lin(HEX.ink), roughness: .2, clearcoat: 1 });
+
+  /* ---------- painted plumage: one continuous texture for the whole body skin ---------- */
+  const rgb = hex => { const n = parseInt(hex.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; };
+  const mixc = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  const sstep = (a, b, x) => { const t = cl((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+  const band = (x, a, b, f) => sstep(a - f, a + f, x) * (1 - sstep(b - f, b + f, x));
+  const CF = rgb(HEX.f), CA = rgb(HEX.a), CAM = rgb(HEX.am), CT = rgb(HEX.t), CINK = rgb(HEX.ink), CCAPE = rgb('#FFB300'), CSKIN = rgb('#E3A86E'), CFT = rgb(HEX.ft);
+  // which color is where on the body: x = around (0 = top of the back), t = along (0 = tail, 1 = beak)
+  function bodyColor(t, th) {
+    const d = (Math.cos(th) + 1) / 2, side = Math.abs(Math.sin(th));
+    let c = CF;
+    c = mixc(c, CAM, (1 - sstep(.0, .3, t)) * .35 * (1 - d));                       // darker under the tail
+    c = mixc(c, CA, sstep(.42, .62, d) * band(t, .04, .55, .04));                    // golden back and rump
+    c = mixc(c, CT, sstep(.48, .68, d) * band(t, .5, .66, .025));                    // iridescent mantle
+    const cape = sstep(.18, .42, d) * band(t, .64, .84, .02);                        // barred cape on the neck
+    c = mixc(c, CCAPE, cape);
+    c = mixc(c, CA, band(t, .83, 1.01, .02) * sstep(.25, .55, d));                  // golden crown
+    c = mixc(c, CSKIN, band(t, .86, .955, .015) * sstep(.75, .95, side) * band(d, .3, .72, .06));   // bare face
+    c = mixc(c, CFT, band(t, .3, .62, .05) * (1 - sstep(.0, .25, d)) * .25);       // lighter breast center
+    return c;
+  }
+  function paintBody() {
+    const W = 1024, H = 1024, cv = document.createElement('canvas'); cv.width = W; cv.height = H; const c = cv.getContext('2d');
+    const img = c.createImageData(W, H), d = img.data;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const col = bodyColor(1 - y / H, x / W * Math.PI * 2), i = (y * W + x) * 4;
+      d[i] = col[0]; d[i + 1] = col[1]; d[i + 2] = col[2]; d[i + 3] = 255;
+    }
+    c.putImageData(img, 0, 0);
+    // overlapping feather scales over the whole skin (smaller on the head and neck), pointing toward the tail
+    const hc = document.createElement('canvas'); hc.width = W; hc.height = H; const hx = hc.getContext('2d');
+    hx.fillStyle = '#808080'; hx.fillRect(0, 0, W, H);
+    fseed = 31;
+    for (let y = -20; y < H + 20;) {
+      const t = 1 - y / H, sz = t > .84 ? 26 : t > .62 ? 44 : 62 + Math.sin(t * Math.PI) * 14, rowH = sz * (t > .64 && t < .84 ? 1.1 : .62);
+      const off = fr() * sz;
+      for (let x = -sz + off; x < W + sz; x += sz) {
+        const X = x + (fr() - .5) * sz * .45, Y = y + (fr() - .5) * rowH * .7, w = sz * (.55 + fr() * .2), hgt = rowH * (1.1 + fr() * .4);
+        for (const dx of [-W, 0, W]) {
+          const px = X + dx; if (px < -sz || px > W + sz) continue;
+          // shadow where this feather overlaps the one below, a soft highlight on its crown, and its barbs
+          const th = (px / W) * Math.PI * 2, dd = (Math.cos(th) + 1) / 2;
+          const capeF = band(t, .64, .84, .01) * (dd > .2 ? 1 : 0), mantF = band(t, .5, .66, .01) * (dd > .55 ? 1 : 0);
+          if (capeF || mantF) { c.fillStyle = capeF ? 'rgba(13,0,77,.85)' : 'rgba(13,0,77,.6)'; c.beginPath(); c.ellipse(px, Y + hgt * .42, w * .98, hgt * .3, 0, 0, Math.PI); c.fill(); }
+          c.fillStyle = `rgba(20,0,30,${.07 + fr() * .07})`; c.beginPath(); c.ellipse(px, Y + hgt * .5, w, hgt * .32, 0, 0, Math.PI); c.fill();
+          const g = c.createRadialGradient(px, Y, 1, px, Y + hgt * .2, w); g.addColorStop(0, 'rgba(255,255,255,.14)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+          c.fillStyle = g; c.beginPath(); c.ellipse(px, Y + hgt * .15, w, hgt * .45, 0, 0, Math.PI); c.fill();
+          c.strokeStyle = 'rgba(30,0,40,.14)'; c.lineWidth = .7;
+          for (let b = -6; b <= 6; b++) { c.beginPath(); c.moveTo(px, Y - hgt * .1); c.quadraticCurveTo(px + b * w * .08, Y + hgt * .2, px + b * w * .15, Y + hgt * .5); c.stroke(); }
+          c.strokeStyle = 'rgba(255,240,220,.25)'; c.lineWidth = 1; c.beginPath(); c.moveTo(px, Y - hgt * .1); c.lineTo(px, Y + hgt * .45); c.stroke(); c.lineWidth = .7;
+          const hg = hx.createRadialGradient(px, Y, 1, px, Y + hgt * .25, w * 1.05); hg.addColorStop(0, 'rgba(255,255,255,.9)'); hg.addColorStop(1, 'rgba(0,0,0,.6)');
+          hx.fillStyle = hg; hx.beginPath(); hx.ellipse(px, Y + hgt * .2, w, hgt * .5, 0, 0, Math.PI); hx.fill();
+        }
+      }
+      y += rowH;
+    }
+    const tex = new T.CanvasTexture(cv); tex.encoding = T.sRGBEncoding; tex.anisotropy = 8;
+    const hd = hx.getImageData(0, 0, W, H).data, hf = new Float32Array(W * H); for (let i = 0; i < W * H; i++) hf[i] = hd[i * 4] / 255;
+    const nm = new T.CanvasTexture(heightToNormal(hf, W, H, 2.4));
+    return { tex, nm };
+  }
+  // one texture for a whole wing: coverts near the leading edge, flight feathers behind, a feathered trailing edge
+  function paintWing() {
+    const W = 1024, H = 512, cv = document.createElement('canvas'); cv.width = W; cv.height = H; const c = cv.getContext('2d');
+    const hc = document.createElement('canvas'); hc.width = W; hc.height = H; const hx = hc.getContext('2d'); hx.fillStyle = '#000'; hx.fillRect(0, 0, W, H);
+    fseed = 41;
+    const flight = (x0, x1, y0, len, wid, inner, outer, tip, gap) => {        // one flight feather drawn along the chord (down the canvas)
+      const cx = (x0 + x1) / 2, w = (x1 - x0) * wid;
+      c.save(); c.beginPath(); c.moveTo(cx - w * .5, y0); c.lineTo(cx - w * .5, y0 + len * .82); c.quadraticCurveTo(cx - w * .45, y0 + len, cx, y0 + len);
+      c.quadraticCurveTo(cx + w * .45, y0 + len, cx + w * .5, y0 + len * .82); c.lineTo(cx + w * .5, y0); c.closePath(); c.clip();
+      const g1 = c.createLinearGradient(0, y0, 0, y0 + len); g1.addColorStop(0, inner); g1.addColorStop(.8, inner); g1.addColorStop(1, tip);
+      c.fillStyle = g1; c.fillRect(cx - w, y0, w, len + 2);
+      const g2 = c.createLinearGradient(0, y0, 0, y0 + len); g2.addColorStop(0, outer); g2.addColorStop(.8, outer); g2.addColorStop(1, tip);
+      c.fillStyle = g2; c.fillRect(cx, y0, w, len + 2);
+      for (let y = y0; y < y0 + len; y += 2.2) { c.strokeStyle = fr() < .5 ? 'rgba(255,255,255,.08)' : 'rgba(10,0,30,.14)'; c.lineWidth = .7;
+        c.beginPath(); c.moveTo(cx, y); c.lineTo(cx - w * .5, y + w * .35); c.moveTo(cx, y); c.lineTo(cx + w * .5, y + w * .35); c.stroke(); }
+      c.fillStyle = 'rgba(0,0,0,.28)'; c.fillRect(cx + w * .5 - 2, y0, 2, len);                // overlap shadow
+      c.restore();
+      c.strokeStyle = 'rgba(255,240,220,.6)'; c.lineWidth = 1.4; c.beginPath(); c.moveTo(cx, y0); c.lineTo(cx, y0 + len * .97); c.stroke();
+      const hg = hx.createLinearGradient(cx - w * .5, 0, cx + w * .5, 0); hg.addColorStop(0, '#666'); hg.addColorStop(.5, '#fff'); hg.addColorStop(1, '#444');
+      hx.fillStyle = hg; hx.fillRect(cx - w * .5, y0, w, len);
+    };
+    // flight feathers: secondaries (inner 62%), primaries (outer 38%), overlapping toward the body
+    for (let k = 0; k < 12; k++) { const x0 = k / 12 * W * .62, x1 = (k + 1) / 12 * W * .62, len = H * (.6 + (k % 2) * .02 - .04 * Math.sin(k / 11 * Math.PI));
+      flight(x0 - 6, x1 + 6, H * .36, len, 1.15, HEX.am, HEX.t, HEX.ink); }
+    for (let k = 0; k < 10; k++) { const x0 = W * (.62 + k / 10 * .38), x1 = W * (.62 + (k + 1) / 10 * .38);
+      flight(x0 - 4, x1 + 4, H * .32, H * (.64 + k * .003), k > 5 ? .78 : 1.1, HEX.a, HEX.am, HEX.ink); }
+    // greater coverts (Amber with Amethyst tips) and lesser coverts (scales) over the leading edge
+    for (let k = 0; k < 22; k++) { const x = (k + .5) / 22 * W, w = W / 22 * 1.25, y0 = H * .14, len = H * .3;
+      const g = c.createLinearGradient(0, y0, 0, y0 + len); g.addColorStop(0, HEX.a); g.addColorStop(.75, HEX.a); g.addColorStop(1, HEX.am);
+      c.fillStyle = g; c.beginPath(); c.moveTo(x - w / 2, y0); c.lineTo(x - w / 2, y0 + len * .8); c.quadraticCurveTo(x, y0 + len * 1.08, x + w / 2, y0 + len * .8); c.lineTo(x + w / 2, y0); c.fill();
+      c.fillStyle = 'rgba(0,0,0,.25)'; c.fillRect(x + w / 2 - 2, y0, 2, len * .85);
+      hx.fillStyle = 'rgba(255,255,255,.5)'; hx.fillRect(x - w / 2, y0, w, len * .9); }
+    c.fillStyle = HEX.f; c.fillRect(0, 0, W, H * .17);
+    for (let r = 0; r < 4; r++) for (let k = 0; k < 44; k++) { const x = (k + (r % 2) * .5) / 44 * W, y = H * (.02 + r * .042), w = W / 44 * .7;
+      c.fillStyle = r % 2 ? 'rgba(239,160,231,.55)' : 'rgba(81,46,171,.25)'; c.beginPath(); c.ellipse(x, y + 6, w, 7, 0, 0, Math.PI); c.fill();
+      c.fillStyle = 'rgba(20,0,30,.25)'; c.beginPath(); c.ellipse(x, y + 12, w, 4, 0, 0, Math.PI); c.fill();
+      hx.fillStyle = 'rgba(255,255,255,.6)'; hx.beginPath(); hx.ellipse(x, y + 6, w, 7, 0, 0, Math.PI); hx.fill(); }
+    const tex = new T.CanvasTexture(cv); tex.encoding = T.sRGBEncoding; tex.anisotropy = 8;
+    const hd = hx.getImageData(0, 0, W, H).data, hf = new Float32Array(W * H); for (let i = 0; i < W * H; i++) hf[i] = hd[i * 4] / 255;
+    return { tex, nm: new T.CanvasTexture(heightToNormal(hf, W, H, 2)) };
+  }
+  // the tail fan: barred feathers side by side with rounded, separated tips
+  function paintFan() {
+    const W = 512, H = 1024, cv = document.createElement('canvas'); cv.width = W; cv.height = H; const c = cv.getContext('2d');
+    for (let k = 0; k < 9; k++) {
+      const x0 = k / 9 * W, w = W / 9 * 1.05, cx = x0 + W / 18, len = H * (1 - Math.abs(k - 4) * .07);
+      c.save(); c.beginPath(); c.moveTo(cx - w / 2, 0); c.lineTo(cx - w / 2, len * .9); c.quadraticCurveTo(cx, len * 1.02, cx + w / 2, len * .9); c.lineTo(cx + w / 2, 0); c.closePath(); c.clip();
+      const g = c.createLinearGradient(0, 0, 0, len); g.addColorStop(0, HEX.a); g.addColorStop(.85, HEX.a); g.addColorStop(1, HEX.f); c.fillStyle = g; c.fillRect(cx - w, 0, w * 2, len);
+      for (let b = 0; b < 9; b++) { const y = len * (.12 + b * .085); c.fillStyle = 'rgba(13,0,77,.85)'; c.beginPath(); c.moveTo(cx - w / 2, y + w * .3); c.lineTo(cx, y); c.lineTo(cx + w / 2, y + w * .3); c.lineTo(cx + w / 2, y + w * .3 + 12); c.lineTo(cx, y + 12); c.lineTo(cx - w / 2, y + w * .3 + 12); c.fill(); }
+      for (let y = 0; y < len; y += 2.5) { c.strokeStyle = 'rgba(20,0,30,.12)'; c.lineWidth = .7; c.beginPath(); c.moveTo(cx, y); c.lineTo(cx - w / 2, y + w * .3); c.moveTo(cx, y); c.lineTo(cx + w / 2, y + w * .3); c.stroke(); }
+      c.fillStyle = 'rgba(0,0,0,.3)'; c.fillRect(cx + w / 2 - 2, 0, 2, len); c.restore();
+      c.strokeStyle = 'rgba(255,240,220,.6)'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(cx, 0); c.lineTo(cx, len * .97); c.stroke();
+    }
+    const tex = new T.CanvasTexture(cv); tex.encoding = T.sRGBEncoding; tex.anisotropy = 8; return tex;
+  }
+  const BODYP = paintBody(), WINGP = paintWing(), FANT = paintFan();
+  const skinM = new T.MeshPhysicalMaterial({ map: BODYP.tex, normalMap: BODYP.nm, normalScale: new T.Vector2(1.7, 1.7), roughness: .64, metalness: 0, side: T.DoubleSide,
+    sheen: .6, sheenRoughness: .4, sheenColor: lin(HEX.at).multiplyScalar(.28), emissive: lin('#ffffff'), emissiveMap: BODYP.tex, emissiveIntensity: .05, envMapIntensity: .45 });
+  const wingM = new T.MeshPhysicalMaterial({ map: WINGP.tex, normalMap: WINGP.nm, normalScale: new T.Vector2(1.2, 1.2), alphaTest: .45, side: T.DoubleSide, roughness: .6,
+    sheen: .5, sheenRoughness: .4, sheenColor: lin(HEX.at).multiplyScalar(.28), emissive: lin('#ffffff'), emissiveMap: WINGP.tex, emissiveIntensity: .06, envMapIntensity: .5 });
+  const fanM = new T.MeshPhysicalMaterial({ map: FANT, alphaTest: .45, side: T.DoubleSide, roughness: .6, sheen: .4, sheenColor: lin(HEX.at).multiplyScalar(.25),
+    emissive: lin('#ffffff'), emissiveMap: FANT, emissiveIntensity: .06, envMapIntensity: .5 });
+
+  /* =========================== GEOMETRY HELPERS =========================== */
+  function gridGeo(nu, nv) {         // a dynamic (nu x nv) surface; uv u = 0..1 across, v = 0..1 along
+    const g = new T.BufferGeometry(), n = nu * nv;
+    g.setAttribute('position', new T.BufferAttribute(new Float32Array(n * 3), 3).setUsage(T.DynamicDrawUsage));
+    const uv = new Float32Array(n * 2), idx = [];
+    for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) { uv[(j * nu + i) * 2] = i / (nu - 1); uv[(j * nu + i) * 2 + 1] = j / (nv - 1); }
+    for (let j = 0; j < nv - 1; j++) for (let i = 0; i < nu - 1; i++) { const a = j * nu + i, b = a + 1, c = a + nu, d = c + 1; idx.push(a, c, b, b, c, d); }
+    g.setAttribute('uv', new T.BufferAttribute(uv, 2)); g.setIndex(idx); return g;
+  }
+  function featherGeo(len, wid, curve = .08) {
+    const g = new T.PlaneGeometry(len, wid, 10, 1); g.translate(len / 2, 0, 0); g.rotateX(-Math.PI / 2);
+    const p = g.attributes.position, uv = g.attributes.uv;
+    for (let i = 0; i < p.count; i++) { const x = p.getX(i), u = x / len; p.setY(i, curve * len * u * u); uv.setXY(i, p.getZ(i) / wid + .5, u); }
+    g.computeVertexNormals(); return g;
+  }
+  function feather(parent, mat, len, wid, curve) { const m = new T.Mesh(featherGeo(len, wid, curve), mat); m.castShadow = true; parent.add(m); return m; }
+
+  /* =========================== MODEL =========================== */
+  const group = new T.Group(); group.visible = false; scene.add(group);
+  const model = new T.Group(); group.add(model);
+  const torsoG = new T.Group(); model.add(torsoG);
+  // the body skin: one surface swept along the spine from tail to beak
+  const LR = 84, LS = 56;
+  const skinGeo = gridGeo(LS + 1, LR); const skin = new T.Mesh(skinGeo, skinM); skin.castShadow = skin.receiveShadow = true; skin.frustumCulled = false; model.add(skin);
+  // cross-section half-width and half-height along the body (t: 0 = tail, 1 = beak)
+  const PROF = [[0, .75, .5], [.07, 1.35, 1.0], [.18, 2.05, 1.95], [.34, 2.3, 2.45], [.48, 2.15, 2.4], [.58, 1.85, 2.0], [.66, 1.5, 1.6], [.76, 1.32, 1.42], [.84, 1.25, 1.35], [.9, 1.28, 1.38], [.95, 1.05, 1.08], [.985, .7, .68], [1, .5, .48]];
+  function prof(t) { for (let i = 1; i < PROF.length; i++) if (t <= PROF[i][0]) { const a = PROF[i - 1], b = PROF[i], k = sstep(a[0], b[0], t); return [mix(a[1], b[1], k), mix(a[2], b[2], k)]; } return [.5, .48]; }
+  const headRest = v3(0, 3.7, 6.7);
+  const head = new T.Group(); head.position.copy(headRest); model.add(head);
+  const beakGeo = (() => { const g = new T.ConeGeometry(.52, 2.0, 20, 8); g.rotateX(Math.PI / 2); const p = g.attributes.position;
+    for (let i = 0; i < p.count; i++) { const z = p.getZ(i); if (z > .2) p.setY(i, p.getY(i) - Math.pow(z - .2, 2) * .42); } g.computeVertexNormals(); return g; })();
+  const beak = new T.Mesh(beakGeo, beakM); beak.position.set(0, -.1, 2.1); beak.castShadow = true; head.add(beak);
+  const jaw = new T.Mesh(new T.ConeGeometry(.4, 1.2, 16), beakM); jaw.rotation.x = Math.PI / 2; jaw.position.set(0, -.45, 1.85); head.add(jaw);
+  const lids = [];
+  for (const s of [-1, 1]) {
+    const e = new T.Mesh(new T.SphereGeometry(.3, 22, 16), irisM); e.position.set(s * 1.06, .35, .6); head.add(e);
+    const pu = new T.Mesh(new T.SphereGeometry(.15, 16, 12), eyeM); pu.position.copy(e.position).add(v3(s * .18, 0, .05)); head.add(pu);
+    const l = new T.Mesh(new T.SphereGeometry(.36, 16, 10, 0, Math.PI * 2, 0, Math.PI / 1.7), skinM); l.position.copy(e.position); l.visible = false; head.add(l); lids.push(l);
+  }
+  // silky crest: fine strands sweeping back off the crown
+  const crest = [], crestG = new T.Group(); crestG.position.set(0, .95, .3); head.add(crestG);
+  fseed = 21; for (let k = 0; k < 30; k++) { const x = (fr() - .5) * 1.5, len = 3 + fr() * 2.4;
+    const m = feather(crestG, M.strand, len, .95, .32); m.position.set(x, fr() * .2, -fr() * 1.4);
+    m.quaternion.setFromUnitVectors(X1, v3(x * .25, .12 + fr() * .15, -1).normalize()); crest.push(m); }
+  // wings: invisible bones (shoulder → elbow → wrist) drive one continuous surface each
+  const WA = 30, WC = 12;
+  function makeWing(s) {
+    const sh = new T.Group(); sh.rotation.order = 'YZX'; sh.position.set(s * 1.75, 1.7, 1.6); torsoG.add(sh);
+    const fore = new T.Group(); fore.rotation.order = 'YZX'; fore.position.set(s * 3.6, 0, 0); sh.add(fore);
+    const hand = new T.Group(); hand.rotation.order = 'YZX'; hand.position.set(s * 5.4, 0, 0); fore.add(hand);
+    const tipG = new T.Group(); tipG.position.set(s * 8.5, 0, 0); hand.add(tipG);
+    const mesh = new T.Mesh(gridGeo(WA, WC), wingM); mesh.castShadow = mesh.receiveShadow = true; mesh.frustumCulled = false; model.add(mesh);
+    return { s, sh, fore, hand, tipG, mesh, lastTip: v3() };
+  }
+  const wings = [makeWing(1), makeWing(-1)];
+  wings.forEach(W => { W.tipWorld = () => model.localToWorld(W.lastTip.clone()); });
+  // tail fan: one surface of barred feathers
+  const FA = 14, FLN = 10;
+  const tailFan = new T.Group(); tailFan.position.set(0, .75, -6.2); torsoG.add(tailFan);
+  const fan = new T.Mesh(gridGeo(FA, FLN), fanM); fan.castShadow = fan.receiveShadow = true; fan.frustumCulled = false; tailFan.add(fan);
+  // legs and talons
+  const legs = [-1, 1].map(s => {
+    const g = new T.Group(); g.position.set(s * .85, -1.6, .9); torsoG.add(g);
+    const shin = new T.Mesh(new T.CylinderGeometry(.2, .26, 1, 10), legM); g.add(shin);
+    const foot = new T.Group(); g.add(foot);
+    for (const a of [-.45, 0, .45, Math.PI]) { const toe = new T.Group(); toe.rotation.y = a; foot.add(toe);
+      const t = new T.Mesh(new T.CylinderGeometry(.11, .15, 1.25, 8), legM); t.rotation.x = Math.PI / 2; t.position.z = .6; toe.add(t);
+      const cl2 = new T.Mesh(new T.ConeGeometry(.1, .45, 8), clawM); cl2.rotation.x = Math.PI / 2 + .6; cl2.position.set(0, -.1, 1.3); toe.add(cl2); }
+    shin.castShadow = true; return { g, shin, foot };
+  });
+  const auraTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d');
+    const g = x.createRadialGradient(32, 32, 0, 32, 32, 32); g.addColorStop(0, 'rgba(255,255,255,.9)'); g.addColorStop(1, 'rgba(255,255,255,0)'); x.fillStyle = g; x.fillRect(0, 0, 64, 64); return new T.CanvasTexture(c); })();
+  const aura = new T.Sprite(new T.SpriteMaterial({ map: auraTex, color: lin(HEX.f), transparent: true, opacity: .1, depthWrite: false, blending: T.AdditiveBlending }));
+  aura.scale.set(30, 30, 1); model.add(aura);
+  // three long plumes trailing past the fan
+  const TN = 18, plumes = [];
+  [[0, .2, 1], [-.7, .1, .82], [.7, .1, .82]].forEach(([ox, oy, len], i) => {
+    const g = new T.BufferGeometry();
+    g.setAttribute('position', new T.BufferAttribute(new Float32Array(TN * 2 * 3), 3).setUsage(T.DynamicDrawUsage));
+    const uv = new Float32Array(TN * 2 * 2); for (let k = 0; k < TN; k++) { const v = k / (TN - 1); uv.set([0, 1 - v, 1, 1 - v], k * 4); }
+    g.setAttribute('uv', new T.BufferAttribute(uv, 2));
+    const idx = []; for (let k = 0; k < TN - 1; k++) { const a = k * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } g.setIndex(idx);
+    const m = new T.Mesh(g, M.plume); m.castShadow = true; m.frustumCulled = false; m.visible = false; scene.add(m);
+    plumes.push({ off: v3(ox, oy + (PIXEL ? .6 : 0), PIXEL ? -12.4 : -6.0), len, p: [], q: [], m, i });
+  });
+
+  /* =========================== ARTIST-MADE MODEL (optional) ===========================
+     Set CONFIG.phoenixModel to a .glb file (a rigged, animated bird) and it replaces the
+     built-in bird. Everything else stays: perching, balance, flights, snap, hat landings, fire. */
+  const EXT = { ready: false, failed: false, root: null, mixer: null, acts: {}, w: {}, headBone: null, tips: [], tailLocal: null, flyLen: 1 };
+  // keep the model's own texture detail, but map its brightness onto a GACA gradient (Amethyst → Fuchsia → Amber → Amber Tint)
+  function gacaRamp(mat) {
+    const k = CONFIG.phoenixTint; if (!k) return;
+    mat.onBeforeCompile = sh => {
+      Object.assign(sh.uniforms, { gA: { value: lin('#512EAB') }, gB: { value: lin('#DF41CF') }, gC: { value: lin('#FFCE00') }, gD: { value: lin('#FFE67F') }, gK: { value: k } });
+      sh.fragmentShader = 'uniform vec3 gA; uniform vec3 gB; uniform vec3 gC; uniform vec3 gD; uniform float gK;\n' + sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+        { float l = clamp(pow(dot(diffuseColor.rgb, vec3(.299, .587, .114)), .55) * 1.15, 0., 1.);
+          vec3 g = l < .3 ? mix(gA, gB, l / .3) : l < .72 ? mix(gB, gC, (l - .3) / .42) : mix(gC, gD, (l - .72) / .28);
+          diffuseColor.rgb = mix(diffuseColor.rgb, g, gK); }`);
+    };
+    mat.customProgramCacheKey = () => 'gaca' + k; mat.needsUpdate = true;
+  }
+  function loadModel() {
+    const url = CONFIG.phoenixModel; if (!url) return;
+    if (!T.GLTFLoader) { console.warn('[phoenix] model loader missing'); return; }
+    new T.GLTFLoader().load(url, gltf => {
+      const root = gltf.scene, holder = new T.Group(), wrap = new T.Group();
+      holder.rotation.y = ({ '+z': 0, '-z': Math.PI, '+x': -Math.PI / 2, '-x': Math.PI / 2 })[CONFIG.phoenixModelForward] ?? 0;
+      holder.add(root); wrap.add(holder);
+      // size it: beak-to-tail (or wingtip-to-wingtip) about 34 cm, feet on the perch, centered
+      wrap.updateMatrixWorld(true);
+      let box = new T.Box3().setFromObject(wrap); const size = box.getSize(v3());
+      holder.scale.multiplyScalar(34 * (CONFIG.phoenixModelSize || 1) / Math.max(size.x, size.y, size.z));
+      wrap.updateMatrixWorld(true); box = new T.Box3().setFromObject(wrap); const ctr = box.getCenter(v3());
+      wrap.position.set(-ctr.x, -box.min.y - 4.4, -ctr.z);
+      root.traverse(o => {
+        if (o.isMesh || o.isSkinnedMesh) { o.castShadow = o.receiveShadow = true; o.frustumCulled = false;
+          (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { if (m) { m.envMapIntensity = .6; gacaRamp(m); } }); }
+        if (o.isBone) { const n = o.name.toLowerCase();
+          if (!EXT.headBone && /head/.test(n) && !/end|top|nub/.test(n)) EXT.headBone = o;
+          if (/tail/.test(n)) EXT.tailBone = o;
+          if (/wing|hand|finger|primar/.test(n) && o.children.filter(c => c.isBone).length === 0) EXT.tips.push(o); }
+      });
+      // animations: find fly / glide / idle / land by name; a single clip is treated as the flapping cycle
+      const clips = gltf.animations || [], find = re => clips.find(c => re.test(c.name));
+      const pick = { fly: find(/fly|flap|flight|wing/i) || (clips.length ? clips.reduce((a, b) => a.duration >= b.duration ? a : b) : null),
+        idle: find(/idle|stand|perch|rest|sit|breath|look/i), glide: find(/glide|soar/i), land: find(/land/i) };
+      if (Object.keys(CONFIG.phoenixClips || {}).length) for (const [k, n] of Object.entries(CONFIG.phoenixClips)) { const c = clips.find(c => c.name === n); if (c) pick[k] = c; }
+      EXT.mixer = new T.AnimationMixer(root);
+      for (const [k, c] of Object.entries(pick)) if (c) { const a = EXT.mixer.clipAction(c); a.play(); a.setEffectiveWeight(0); EXT.acts[k] = a; EXT.w[k] = 0; }
+      if (EXT.acts.fly) EXT.flyLen = EXT.acts.fly.getClip().duration || 1;
+      model.add(wrap); EXT.root = wrap; EXT.ready = true;
+      // the built-in bird steps aside
+      [skin, fan, head, ...wings.map(W => W.mesh), ...legs.map(l => l.g)].forEach(o => o.visible = false);
+      if (!CONFIG.phoenixExtraPlumes) plumes.forEach(p => p.m.visible = false);
+      if (EXT.tailBone) { wrap.updateMatrixWorld(true); EXT.tailLocal = model.worldToLocal(EXT.tailBone.getWorldPosition(v3())); }
+      else { wrap.updateMatrixWorld(true); const b = new T.Box3().setFromObject(wrap), mz = model.worldToLocal(v3(0, 0, 0)); EXT.tailLocal = v3(0, (b.min.y + b.max.y) / 2 - mz.y, -14); }
+      plumes.forEach(p => { p.rest = null; p.p = []; });
+      console.log('[phoenix] model loaded:', clips.map(c => c.name), 'head:', EXT.headBone && EXT.headBone.name, 'tips:', EXT.tips.length);
+    }, undefined, err => { EXT.failed = true; console.warn('[phoenix] could not load model, using the built-in bird', err); });
+  }
+  function updateExt(dt) {
+    if (!EXT.ready) return;
+    const perched = st.mode === 'perch', A = EXT.acts;
+    // what the bird is doing → how much of each animation to show (smooth crossfades)
+    const want = { idle: 0, fly: 0, glide: 0, land: 0 };
+    if (perched) { if (A.idle) { want.idle = 1 - st.lift * .9; want.fly = st.lift * .9; } else want.fly = 1; }
+    else if (A.land && st.flare > .5) want.land = 1;
+    else if (A.glide) { want.glide = st.glide; want.fly = 1 - st.glide; }
+    else want.fly = 1;
+    for (const k in A) { EXT.w[k] = mix(EXT.w[k], want[k] || 0, 1 - Math.exp(-dt * 6)); A[k].setEffectiveWeight(EXT.w[k]); }
+    if (A.fly) {
+      // flap speed follows the wingbeat; perched with no idle clip, the wings hold still
+      const flapping = !perched || A.idle ? 1 : 0;
+      A.fly.setEffectiveTimeScale(perched && !A.idle ? (st.lift > .5 ? 1.2 : 0) : mix(.15, 1.25, cl(st.flapAmp, 0, 1)) * (1 - st.glide * (A.glide ? 0 : .85)) * flapping + (perched && A.idle ? 1 : 0) * 0);
+      if (perched && !A.idle && st.lift <= .5) A.fly.time = EXT.flyLen * .5;
+    }
+    EXT.mixer.update(dt);
+    // head: quick bird-like looks layered on top of the animation
+    if (EXT.headBone && CONFIG.phoenixHeadLook && perched) {
+      const q = new T.Quaternion().setFromEuler(new T.Euler(st.hp * .5, st.hy * .6, st.hr * .4)); EXT.headBone.quaternion.multiply(q);
+    }
+  }
+  loadModel();
+
+  /* =========================== FIRE =========================== */
+  const flameTex = (() => { const c = document.createElement('canvas'); c.width = 64; c.height = 128; const x = c.getContext('2d');
+    const g = x.createRadialGradient(32, 84, 2, 32, 74, 60); g.addColorStop(0, 'rgba(255,255,255,.85)'); g.addColorStop(.35, 'rgba(255,255,255,.4)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = g; x.beginPath(); x.moveTo(32, 2); x.bezierCurveTo(60, 50, 64, 100, 32, 126); x.bezierCurveTo(0, 100, 4, 50, 32, 2); x.fill(); return new T.CanvasTexture(c); })();
+  const FL = ['#FFCE00', '#DF41CF', '#FFCE00', '#DF41CF', '#FFE67F', '#FFCE00'].map(lin);
+  const flames = Array.from({ length: 110 }, (_, i) => { const s = new T.Sprite(new T.SpriteMaterial({ map: flameTex, color: FL[i % 6], transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending }));
+    s.visible = false; s.renderOrder = 6; scene.add(s); return { s, age: 9, life: 1, v: v3(), w: 1, wob: 0, a: .5 }; });
+  let flameIdx = 0;
+  function emitFlame(at, vel, w, life, a = .5) {
+    if (PIXEL) { pxEmit(at, vel, w, life, 'flame'); return; }
+    const f = flames[flameIdx = (flameIdx + 1) % flames.length];
+    f.s.position.copy(at); f.v.copy(vel); f.w = w; f.life = life; f.age = 0; f.wob = rnd2(0, 6); f.a = a; f.s.visible = true;
+  }
+  function burst(at, s) {
+    for (let k = 0; k < 50; k++) emitFlame(at.clone().add(v3(rnd2(-4, 4), rnd2(-2, 3), rnd2(-4, 4)).multiplyScalar(s)), v3(rnd2(-12, 12), rnd2(25, 70), rnd2(-12, 12)).multiplyScalar(s), rnd2(4, 9) * s, rnd2(.45, .95), .5);
+    if (PIXEL) { for (let k = 0; k < 30; k++) { const a = Math.random() * 6.28; pxEmit(at.clone(), v3(Math.cos(a) * rnd2(10, 40), rnd2(20, 70), Math.sin(a) * rnd2(10, 40)).multiplyScalar(s), 1, rnd2(.6, 1.3), 'spark'); } return; }
+    if (typeof sparks !== 'undefined') for (let k = 0; k < 40 && sparks.length < MAXP - MOTES; k++) {
+      const a = Math.random() * 6.28; sparks.push({ p: at.clone(), v: v3(Math.cos(a) * rnd2(10, 40), rnd2(20, 70), Math.sin(a) * rnd2(10, 40)).multiplyScalar(s), age: 0, life: rnd2(.6, 1.3), c: SPARK[Math.random() * 5 | 0] }); }
+  }
+  function updateFlames(dt) {
+    for (const f of flames) { if (!f.s.visible) continue; f.age += dt; const k = f.age / f.life; if (k >= 1) { f.s.visible = false; continue; }
+      f.s.position.addScaledVector(f.v, dt); f.s.position.x += Math.sin(f.age * 13 + f.wob) * .25; f.v.multiplyScalar(Math.exp(-1.6 * dt)); f.v.y += 30 * dt;
+      const w = f.w * (.6 + .6 * Math.sin(k * Math.PI)); f.s.scale.set(w, w * 1.9, 1); f.s.material.opacity = Math.min(1, f.age / .05) * (1 - k) * f.a; }
+  }
+
+  /* =========================== STATE =========================== */
+  const st = { visible: !!CONFIG.phoenixStartVisible, appear: CONFIG.phoenixStartVisible ? 1 : 0, appearT: 9, mode: 'perch', spot: 'shoulder',
+    timer: rnd2(...CONFIG.phoenixPerchSeconds), pos: v3(), vel: v3(), fwd: v3(0, 0, 1), pitch: 0, pv: 0, roll: 0, rv: 0, crouch: 0, cv: 0,
+    open: 0, phase: 0, flapAmp: 0, lift: 0, depth: 'front', wp: null, wpT: 0, ready: false, brimSide: 1, preen: 0, blink: 0, nextBlink: 3,
+    headW: null, headV: v3(), pPrev: null, pVel: v3(), pAcc: v3(), dip: 0, dipV: 0, flare: 0, fan: 0, takeoffT: 9,
+    hy: 0, hp: 0, hr: 0, hyT: 0, hpT: 0, hrT: 0, hvy: 0, hvp: 0, hvr: 0, nextLook: 1, shuffle: 0, ruffle: 0, breath: 0, glide: 0 };
+  let shoulderL = null, shoulderR = null, hands = [];
+  const brimQ = new T.Quaternion();
+  const sc = () => CONFIG.phoenixSize * (DEMO ? 1 : autoScale);
+
+  function shoulderPerch() {
+    if (!shoulderL || !shoulderR) { const p = headPos.clone().add(v3(14, -18, 0).multiplyScalar(DEMO ? 1 : autoScale)); return { p, out: v3(1, 0, 0) }; }
+    const mine = CONFIG.phoenixShoulder === 'right' ? shoulderR : shoulderL, other = CONFIG.phoenixShoulder === 'right' ? shoulderL : shoulderR;
+    const out = mine.clone().sub(other).setY(0).normalize();
+    return { p: mine.clone().addScaledVector(out, mine.distanceTo(other) * .1), out };   // the outer part of the shoulder
+  }
+  function brimPerch() {
+    hatRoot.updateMatrixWorld(true);
+    const R = 19 * CONFIG.hatScale * (CONFIG.brimSize || 1) * .82, a = Math.PI / 2 - st.brimSide * .95, local = v3(Math.cos(a) * R, .9, Math.sin(a) * R);
+    const p = brimPivot.localToWorld(local.clone()), c = brimPivot.localToWorld(v3(0, .9, 0));
+    return { p, out: p.clone().sub(c).setY(0).normalize(), local };
+  }
+  const hatAvailable = () => appear > .8 && hatOn && poseOk;
+  const perchTarget = () => st.spot === 'brim' && hatAvailable() ? brimPerch() : shoulderPerch();
+  const faceDir = out => out.clone().multiplyScalar(.38).add(v3(0, 0, .92)).setY(0).normalize();   // mostly toward the camera, so the long tail hangs behind your shoulder
+  const perchHeight = () => (PIXEL ? 7.0 : 4.4) * sc();
+
+  function takeOff() { if (!st.visible || st.mode !== 'perch') return; st.mode = 'fly'; st.timer = rnd2(...CONFIG.phoenixFlightSeconds); st.wp = null; st.takeoffT = 0;
+    st.vel.copy(st.fwd).multiplyScalar(50 * sc()).add(v3(0, 110 * sc(), 0)); if (st.spot === 'brim') hatKick(-1); }
+  function land(spot) { if (st.mode === 'perch' && spot === st.spot) return; if (st.mode === 'perch') takeOff(); st.spot = spot; st.mode = 'land'; }
+  function hatKick(s) { if (typeof M1 === 'undefined') return; const b = brimPerch().local.clone().normalize(); M1.vx += b.x * .5 * s; M1.vz += b.z * .5 * s; st.dipV += 2.2 * s; }
+  function toggle() {
+    const P = shoulderPerch();
+    if (!st.visible) {
+      Object.assign(st, { visible: true, appearT: 0, mode: 'perch', spot: 'shoulder', timer: rnd2(...CONFIG.phoenixPerchSeconds), pitch: 0, roll: 0, pv: 0, rv: 0, lift: 0, open: 0, headW: null, depth: 'front' });
+      st.pos.copy(P.p).add(v3(0, perchHeight(), 0)); st.fwd.copy(faceDir(P.out)); plumes.forEach(t => t.p = []);
+      burst(P.p.clone().add(v3(0, 5 * sc(), 0)), sc());
+    } else { st.visible = false; st.appearT = 0; burst(st.pos.clone(), sc() * .8); if (st.spot === 'brim' && st.mode === 'perch') hatKick(-1); }
+  }
+  function avoid(p) {
+    const push = v3(), s = sc();
+    const seg = (a, b, r) => { const ab = b.clone().sub(a), t = cl(p.clone().sub(a).dot(ab) / Math.max(1e-6, ab.lengthSq()), 0, 1), c = a.clone().addScaledVector(ab, t);
+      const d = p.clone().sub(c), L = d.length(); if (L < r) push.addScaledVector(d.normalize(), (r - L) / r); };
+    if (poseOk && appear > .3 && pts.length) for (let i = 0; i < pts.length - 1; i++) seg(pts[i], pts[i + 1], (i < 2 ? 22 : 13) * (DEMO ? 1 : autoScale) + 8 * s);
+    seg(headPos, headPos.clone().add(v3(0, 4 * s, 0)), 22 * s);
+    if (shoulderL && shoulderR) seg(shoulderL, shoulderR, 15 * s);
+    return push;
+  }
+
+  /* =========================== BEHAVIOR =========================== */
+  function update(dt, t) {
+    if (!ON) return;
+    const s = sc();
+    st.appearT += dt; st.appear = st.visible ? cl((st.appearT - .16) / .45, 0, 1) : cl(1 - st.appearT / .2, 0, 1);
+    if (!st.ready) { const P = shoulderPerch(); st.pos.copy(P.p).add(v3(0, perchHeight(), 0)); st.fwd.copy(faceDir(P.out)); st.ready = true; }
+    if (!st.visible && st.mode !== 'perch') st.mode = 'perch';
+    if (st.visible && st.spot === 'brim' && st.mode === 'perch' && (!hatAvailable() || (typeof stand !== 'undefined' && stand.target > .5))) land('shoulder');
+    st.timer -= dt; st.takeoffT += dt; st.breath += dt;
+    const P = perchTarget(), feet = P.p.clone();
+    // hops: now and then it hops a few centimeters along your shoulder (crouch, jump with a wing flick, land)
+    st.hopT = (st.hopT ?? 9) + dt; st.perchOff = st.perchOff ?? 0; st.perchCur = st.perchCur ?? 0;
+    if (st.mode === 'perch' && st.spot === 'shoulder' && st.hopT > 1 && st.lift < .1 && !st.preen && Math.random() < dt * .09) {
+      st.hopT = 0; st.perchOff = cl(st.perchOff + (Math.random() < .5 ? -1 : 1) * rnd2(2.5, 4) * sc(), -4.5 * sc(), 4.5 * sc()); if (Math.abs(st.perchOff) > 4 * sc()) st.perchOff *= -.5; }
+    const hu = cl((st.hopT - .1) / .32, 0, 1), hopArc = st.hopT < .45 ? Math.sin(Math.PI * hu) : 0;
+    if (st.hopT < .1) st.cv += 14 * sc() * dt * 60 * .016;                       // crouch to spring
+    st.perchCur += (st.perchOff - st.perchCur) * (st.hopT < .45 ? hu * .35 : .2);
+    if (st.spot === 'shoulder') feet.addScaledVector(P.out, st.perchCur);
+    // startle: a hand coming close makes it flare its wings; too close and it takes off
+    if (st.visible && st.mode === 'perch' && hands.length) {
+      const dmin = Math.min(...hands.map(hp => hp.distanceTo(st.pos))) / sc();
+      if (dmin < 13) st.lift = Math.max(st.lift, cl((13 - dmin) / 6, 0, 1));
+      if (dmin < 7 && st.timer > -99) { st.timer = 0; takeOff(); }
+    }
+    if (!st.pPrev) st.pPrev = feet.clone();
+    { const v = feet.clone().sub(st.pPrev).divideScalar(Math.max(dt, 1e-3)); const a = v.clone().sub(st.pVel).divideScalar(Math.max(dt, 1e-3));
+      st.pVel.lerp(v, .5); st.pAcc.lerp(a, .3); st.pPrev.copy(feet); }
+    if (st.mode === 'perch') {
+      st.fwd.lerp(faceDir(P.out), 1 - Math.exp(-dt * 5)).normalize();
+      const f = st.fwd, side = v3().crossVectors(UP, f).normalize();
+      const fa = st.pAcc.dot(f), sa = st.pAcc.dot(side), ua = st.pAcc.y, k1 = 90, k2 = 140;
+      st.pv += (k1 * (cl(-fa / (1300 * s), -.55, .55) - .26 - st.pitch) - 2 * .55 * Math.sqrt(k1) * st.pv) * dt; st.pitch += st.pv * dt;
+      st.rv += (k1 * (cl(sa / (1500 * s), -.45, .45) + (st.ruffle > 0 ? Math.sin(st.ruffle * 55) * .22 : 0) - st.roll) - 2 * .55 * Math.sqrt(k1) * st.rv) * dt; st.roll += st.rv * dt;
+      st.cv += (k2 * (cl(ua / (1100 * s), -.15, .2) * 1.6 * s - st.crouch) - 2 * .6 * Math.sqrt(k2) * st.cv) * dt; st.crouch += st.cv * dt;
+      const alarm = cl(-ua / (900 * s) + st.pAcc.length() / (2600 * s) - .12, 0, 1);
+      st.lift = alarm > st.lift ? mix(st.lift, alarm, 1 - Math.exp(-dt * 18)) : mix(st.lift, alarm, 1 - Math.exp(-dt * 2.5));
+      // idle life: wing shuffles, ruffles, preening
+      st.shuffle = Math.max(0, st.shuffle - dt); st.ruffle = Math.max(0, st.ruffle - dt); st.preen = st.lift > .2 ? 0 : Math.max(0, st.preen - dt);
+      if (st.lift < .05 && !st.preen && !st.shuffle) { if (Math.random() < dt * .08) st.shuffle = .9; else if (Math.random() < dt * .03) st.ruffle = .55; else if (Math.random() < dt * .04) st.preen = 1.8; }
+      const shuffleOpen = st.shuffle > 0 ? Math.sin((.9 - st.shuffle) / .9 * Math.PI) * .45 : 0;
+      st.open = mix(st.open, cl(st.lift * 1.3 + shuffleOpen, 0, 1), 1 - Math.exp(-dt * 12));
+      st.flapAmp = st.lift > .55 ? st.lift : 0; st.glide = 0;
+      st.fan = mix(st.fan, st.shuffle > 0 ? .5 : st.lift * .8, 1 - Math.exp(-dt * 8));
+      st.flare = mix(st.flare, 0, 1 - Math.exp(-dt * 6));
+      st.pos.copy(feet).add(v3(0, perchHeight() - st.crouch + hopArc * 4.5 * sc(), 0)); st.vel.copy(st.pVel);
+      if (hopArc > 0) st.open = Math.max(st.open, hopArc * .45);
+      if (st.dipV !== undefined) st.dipV += ((st.spot === 'brim' ? -60 * (st.dip - .065) : -60 * st.dip) - 7 * st.dipV) * dt;
+      if (st.visible && CONFIG.phoenixAutoFly && st.timer <= 0) takeOff();
+    } else {
+      if (st.mode === 'fly') {
+        if (!st.wp || (st.wpT -= dt) <= 0 || st.wp.distanceTo(st.pos) < 10 * s) { const a = Math.random() * Math.PI * 2, r = rnd2(34, 60) * s;
+          st.wp = headPos.clone().add(v3(Math.cos(a) * r, rnd2(-2, 32) * s, Math.sin(a) * r * .8)); st.wpT = rnd2(1.8, 3.2); }
+        if (st.timer <= 0) land(hatAvailable() && Math.random() < CONFIG.phoenixHatPerch ? 'brim' : 'shoulder');
+      }
+      const tgt = st.mode === 'land' ? feet.clone().add(v3(0, perchHeight(), 0)) : st.wp;
+      const d = tgt.clone().sub(st.pos), dist = d.length();
+      let speed = (st.mode === 'land' ? 95 : 120) * s; if (st.mode === 'land') speed *= cl(dist / (45 * s), .16, 1);
+      const want = d.normalize().multiplyScalar(speed);
+      { const fade = st.mode === 'fly' ? 1 : cl((dist - 30 * s) / (20 * s), 0, 1); if (fade > 0) want.addScaledVector(avoid(st.pos), 170 * s * fade); }   // no keep-away on the final approach
+      { const g = 260 * s, sk2 = stroke(st.phase), elevNow = sk2.elev * cl(st.flapAmp, 0, 1.2);
+        const dE = dt > 0 ? ((st.prevElev ?? elevNow) - elevNow) / dt : 0; st.prevElev = elevNow;
+        const flapF = Math.max(0, dE) * 50 * s * st.open;                                   // downstroke = lift + thrust
+        const acc = want.clone().sub(st.vel).multiplyScalar(st.mode === 'land' ? 2.4 : 1.15);  // steering toward where it wants to go
+        acc.y += -g + flapF + g * .85 * st.glide;                                            // gravity vs. wingbeat lift (or glide lift)
+        if (st.mode === 'land') { const near = cl(1.35 - dist / (40 * s), 0, 1);                 // landing: hover-flapping holds it up, it steers firmly onto the perch
+          acc.multiplyScalar(1 - near).addScaledVector(want.clone().sub(st.vel), 3.2 * near); acc.y += (flapF - 265 * s * cl(st.flapAmp, 0, 1.2) * st.open) * .3 * near; }   // wingbeat bob with zero average push
+        acc.addScaledVector(st.fwd, flapF * .3).addScaledVector(st.vel, -.22);               // thrust and drag
+        st.vel.addScaledVector(acc, dt); const sp = st.vel.length(), vmax = 190 * s; if (sp > vmax) st.vel.multiplyScalar(vmax / sp);
+        // final approach: a guided, critically damped glide onto the perch (always settles), keeping the wingbeat bob
+        if (st.mode === 'land') { const toT = tgt.clone().sub(st.pos), dd = toT.length();
+          if (dd < 28 * s) { const k = 1 - Math.exp(-dt * 6); st.vel.lerp(toT.normalize().multiplyScalar(Math.min(dd * 3.2, 95 * s)), k); } } }
+      st.pos.addScaledVector(st.vel, dt);
+      const hv = st.vel.clone().setY(0); if (hv.length() > 5 * s) st.fwd.lerp(hv.normalize(), 1 - Math.exp(-dt * 5)).normalize();
+      const turn = v3().crossVectors(st.fwd, st.vel.clone().normalize()).y;
+      // landing flare: body tips up, wings brake, tail fans, legs reach forward
+      st.flare = mix(st.flare, st.mode === 'land' ? cl(1 - dist / (22 * s), 0, 1) : 0, 1 - Math.exp(-dt * 6));
+      const travelPitch = cl(-Math.atan2(st.vel.y, Math.hypot(st.vel.x, st.vel.z) + 1e-3), -.5, .5);
+      st.pitch = mix(st.pitch, mix(travelPitch, -1.05, st.flare), 1 - Math.exp(-dt * 5));
+      st.roll = mix(st.roll, cl(-turn * 2.8, -.75, .75) * (1 - st.flare), 1 - Math.exp(-dt * 4));
+      const climbing = st.vel.y > 15 * s, descending = st.vel.y < -18 * s;
+      st.glide = mix(st.glide, descending && st.flare < .2 && st.takeoffT > 1 ? 1 : 0, 1 - Math.exp(-dt * 2));
+      const amp = st.takeoffT < .8 ? 1.15 : st.flare > .2 ? 1 : climbing ? 1 : .7 + .25 * Math.sin(t * .7);
+      st.flapAmp = mix(st.flapAmp, amp * (1 - st.glide * .9), 1 - Math.exp(-dt * 4));
+      st.open = mix(st.open, 1, 1 - Math.exp(-dt * 6)); st.crouch = mix(st.crouch, 0, .2); st.preen = 0;
+      st.fan = mix(st.fan, cl(st.flare + Math.abs(turn) * 1.5, 0, 1), 1 - Math.exp(-dt * 6));
+      st.dipV += (-60 * st.dip - 7 * st.dipV) * dt;
+      if (st.mode === 'land' && (dist < 1.4 * s || (dist < 3.5 * s && st.vel.length() < 45 * s))) { st.mode = 'perch'; st.timer = rnd2(...CONFIG.phoenixPerchSeconds); st.pv = st.rv = 0; st.shuffle = .9; if (st.spot === 'brim') hatKick(1); }
+      // fire trails from the wingtips and plumes
+      if (st.visible && st.appear > .5) {
+        for (const W of (EXT.ready ? EXT.tips.slice(0, 2).map(b => ({ tipWorld: () => b.getWorldPosition(v3()) })) : wings)) if (Math.random() < dt * 30) { const tip = W.tipWorld(); emitFlame(tip, st.vel.clone().multiplyScalar(-.15), rnd2(1.2, 2.2) * s, rnd2(.25, .45), .35); }
+        for (const pl of plumes) if (pl.p.length && Math.random() < dt * 14) emitFlame(pl.p[TN - 1].clone(), v3(0, 8 * s, 0), rnd2(1.5, 2.6) * s, rnd2(.3, .5), .35);
+      }
+    }
+    st.dip += st.dipV * dt;
+    { const b = brimPerch().local.clone().setY(0).normalize(), ax = v3().crossVectors(UP, b).normalize(); brimQ.setFromAxisAngle(ax.lengthSq() ? ax : X1, st.dip * (st.visible ? st.appear : 0)); }
+    // wingbeat clock: ~2.6 beats per second, faster on takeoff
+    st.phase += dt * Math.PI * 2 * (st.mode === 'perch' ? 4.2 : 2.4 + st.flapAmp * .9);
+    // head: quick saccades that snap to a new direction and hold, like a real bird
+    st.nextLook -= dt;
+    if (st.nextLook <= 0) { st.nextLook = rnd2(.5, 2.4); st.hyT = st.mode === 'perch' ? rnd2(-.9, .9) : rnd2(-.2, .2); st.hpT = rnd2(-.3, .25); st.hrT = Math.random() < .25 ? rnd2(-.5, .5) : 0; }
+    const hw = 26;
+    for (const [a, v, tg] of [['hy', 'hvy', 'hyT'], ['hp', 'hvp', 'hpT'], ['hr', 'hvr', 'hrT']]) { st[v] += (hw * hw * (st[tg] - st[a]) - 2 * hw * st[v]) * dt; st[a] += st[v] * dt; }
+    st.nextBlink -= dt; if (st.nextBlink <= 0) { st.blink = .12; st.nextBlink = rnd2(2, 6); } st.blink = Math.max(0, st.blink - dt);
+    // in front of you or behind? only switch while clear of your head and shoulders on screen
+    if (!DEMO && LAYER) {
+      const want = st.mode === 'perch' ? 'front' : (st.pos.z < headPos.z - 4 * s ? 'back' : 'front');
+      if (want !== st.depth) {
+        const sp = st.pos.clone().project(camera), hp = headPos.clone().project(camera);
+        let x0 = hp.x - .12, x1 = hp.x + .12; if (shoulderL && shoulderR) { const a = shoulderL.clone().project(camera), b = shoulderR.clone().project(camera); x0 = Math.min(x0, a.x, b.x) - .05; x1 = Math.max(x1, a.x, b.x) + .05; }
+        const top = headPos.clone().add(v3(0, 14 * s, 0)).project(camera).y;
+        if (sp.x < x0 || sp.x > x1 || sp.y > top + .05) st.depth = want;
+      }
+    }
+    if (st.visible && st.appear > .5 && typeof sparks !== 'undefined' && plumes[0].p.length && Math.random() < dt * (st.mode === 'perch' ? 2 : 10)) {
+      const pl = plumes[Math.random() * plumes.length | 0], p = pl.p[(TN * .5 + Math.random() * TN * .5) | 0];
+      if (p && PIXEL) pxEmit(p.clone(), v3(rnd2(-6, 6), rnd2(8, 22), rnd2(-6, 6)).multiplyScalar(s), 1, rnd2(.5, 1.1), 'ember');
+      else if (p && sparks.length < MAXP - MOTES) sparks.push({ p: p.clone(), v: v3(rnd2(-6, 6), rnd2(8, 22), rnd2(-6, 6)).multiplyScalar(s), age: 0, life: rnd2(.5, 1.1), c: SPARK[Math.random() * 3 | 0] });
+    }
+    updateFlames(dt);
+    pose(t, dt);
+  }
+
+  /* =========================== POSE =========================== */
+  // one wingbeat: a strong downstroke, then a quicker upstroke with the wrist flexed and the tip twisted open
+  function stroke(phase) {
+    const u = ((phase / (Math.PI * 2)) % 1 + 1) % 1;
+    if (u < .56) { const k = ease(u / .56); return { elev: mix(.95, -.8, k), flex: 0, twist: 0 }; }
+    const k = ease((u - .56) / .44); return { elev: mix(-.8, .95, k), flex: Math.sin(k * Math.PI) * .75, twist: Math.sin(k * Math.PI) };
+  }
+  function poseBones(W, open, sk, amp, glide, flare) {
+    const s = W.s, elev = sk.elev * amp + (1 - amp) * mix(0, .16, open) + glide * .1, flex = sk.flex * amp, sweep = flare * .45;
+    W.sh.rotation.set(0, s * mix(1.32, .02 - sweep, open), s * (elev * open + mix(-.1, 0, open)));
+    W.fore.rotation.set(0, s * mix(-2.5, .06 + flex * .55, open), s * (-elev * .15 * open));
+    W.hand.rotation.set(0, s * mix(2.4, -.1 + flex * .95, open), s * (-elev * .18 * open));
+  }
+  const _q = new T.Quaternion(), _m = new T.Matrix4();
+  const toModel = (obj, local) => model.worldToLocal(obj.localToWorld(local.clone()));
+  const backDir = obj => { obj.getWorldQuaternion(_q); const d = v3(0, 0, -1).applyQuaternion(_q); model.getWorldQuaternion(_q); return d.applyQuaternion(_q.invert()).normalize(); };
+  const curveL = new T.CatmullRomCurve3([], false, 'centripetal');
+  // sweep the body skin along the spine, from the tail through the neck to the beak
+  function buildSkin(bob) {
+    const hf = v3(0, 0, 1).applyQuaternion(head.quaternion), hp = head.position;
+    const neckBase = v3(0, 1.75 + bob, 4.3), neckMid = neckBase.clone().lerp(hp, .5).add(v3(0, .5, -.45));
+    curveL.points = [v3(0, .8 + bob, -6.9), v3(0, 1.15 + bob, -4.6), v3(0, 1.2 + bob, -1.4), v3(0, .75 + bob, 1.7), neckBase, neckMid,
+      hp.clone().addScaledVector(hf, -.75), hp.clone().addScaledVector(hf, .45), hp.clone().addScaledVector(hf, 1.45)];
+    curveL.updateArcLengths();
+    const pos = skinGeo.attributes.position.array, P = v3(), Tg = v3(), side = v3(), up = v3(), UPR = v3(0, 1, 0);
+    for (let j = 0; j < LR; j++) {
+      const t = j / (LR - 1); curveL.getPointAt(t, P); curveL.getTangentAt(t, Tg).normalize();
+      side.crossVectors(Tg, UPR); if (side.lengthSq() < 1e-4) side.set(-1, 0, 0); side.normalize(); up.crossVectors(side, Tg).normalize();
+      const [rx, ry] = prof(t), sag = -.35 * band(t, .2, .56, .1);
+      for (let i = 0; i <= LS; i++) {
+        const th = i / LS * Math.PI * 2, k = (j * (LS + 1) + i) * 3, sn = Math.sin(th), cs = Math.cos(th);
+        const yy = cs * ry + (cs < 0 ? sag : 0);
+        pos[k] = P.x + side.x * sn * rx + up.x * yy; pos[k + 1] = P.y + side.y * sn * rx + up.y * yy; pos[k + 2] = P.z + side.z * sn * rx + up.z * yy;
+      }
+    }
+    skinGeo.attributes.position.needsUpdate = true; skinGeo.computeVertexNormals();
+  }
+  // a wing surface: leading edge along the bones, chord swept back from each bone, feathered trailing edge in the texture
+  const CHORD = [[0, 4.2], [.3, 7.4], [.62, 8.8], [.84, 12.2], [1, 8.5]];
+  const chordAt = a => { for (let i = 1; i < CHORD.length; i++) if (a <= CHORD[i][0]) { const A = CHORD[i - 1], B = CHORD[i]; return mix(A[1], B[1], sstep(A[0], B[0], a)); } return 8.5; };
+  function buildWing(W, twist) {
+    const s = W.s, ps = toModel(W.sh, v3()), pe = toModel(W.fore, v3()), pw = toModel(W.hand, v3()), pt = toModel(W.tipG, v3());
+    const ds = backDir(W.sh), de = backDir(W.fore), dw = backDir(W.hand);
+    W.lastTip.copy(pt);
+    const le = new T.CatmullRomCurve3([ps, pe, pw, pt], false, 'centripetal');
+    const pos = W.mesh.geometry.attributes.position.array, P = v3(), D = v3(), span = v3(), up = v3();
+    for (let i = 0; i < WA; i++) {
+      const a = i / (WA - 1); le.getPoint(a, P); le.getTangent(a, span).normalize();
+      if (a < .3) D.copy(ds).lerp(de, a / .3); else if (a < .62) D.copy(de).lerp(dw, (a - .3) / .32); else D.copy(dw);
+      D.lerp(span, sstep(.82, 1, a) * .55).normalize();                                   // the wingtip sweeps outward to a point
+      if (twist) D.applyAxisAngle(span, twist * s * sstep(.5, 1, a) * .5);                // upstroke: the tip twists open
+      up.crossVectors(span, D).normalize().multiplyScalar(s);
+      const L = chordAt(a), o = sstep(.12, .85, st.open);
+      // folded: the wing lies against the flank, leading edge along the back, feathers down and back over the side
+      const zf = 2.0 - a * 10.2, rxf = prof(cl((zf + 6.9) / 15.5, 0, 1))[0];
+      const FP = v3(s * (rxf + .35 - a * .2), 1.75 - a * .35 + torsoG.position.y, zf), FD = v3(s * .12, -1, -.42).normalize(), FL2 = mix(4.6, 3.2, a);
+      for (let j = 0; j < WC; j++) {
+        const c = j / (WC - 1), k = (j * WA + i) * 3, camber = Math.sin(Math.PI * Math.min(1, c * 1.4)) * L * .06;
+        const ox = P.x + D.x * L * c + up.x * camber, oy = P.y + D.y * L * c + up.y * camber, oz = P.z + D.z * L * c + up.z * camber;
+        const fx = FP.x + FD.x * FL2 * c + s * Math.sin(Math.PI * c) * .3, fy = FP.y + FD.y * FL2 * c, fz = FP.z + FD.z * FL2 * c;
+        pos[k] = mix(fx, ox, o); pos[k + 1] = mix(fy, oy, o); pos[k + 2] = mix(fz, oz, o);
+      }
+    }
+    W.mesh.geometry.attributes.position.needsUpdate = true; W.mesh.geometry.computeVertexNormals();
+  }
+  // the tail fan opens and closes
+  function buildFan(spread, droop) {
+    const pos = fan.geometry.attributes.position.array;
+    for (let j = 0; j < FLN; j++) for (let i = 0; i < FA; i++) {
+      const a = i / (FA - 1) - .5, l = j / (FLN - 1), L = 19 - Math.abs(a) * 12, ang = a * spread * 2, r = l * L, k = (j * FA + i) * 3;
+      pos[k] = Math.sin(ang) * r; pos[k + 1] = -droop * r * r * .02 + Math.abs(a) * .3 * l; pos[k + 2] = -Math.cos(ang) * r;
+    }
+    fan.geometry.attributes.position.needsUpdate = true; fan.geometry.computeVertexNormals();
+  }
+  function pose(t, dt) {
+    const s = sc(), vis = st.appear > .01 && (!LAYER || (IS_FRONT ? st.depth === 'front' : st.depth === 'back'));
+    group.visible = vis && !PIXEL; plumes.forEach(p => p.m.visible = vis && !PIXEL);
+    if (!vis && !st.visible) { pxRender(t, dt, false); return; }
+    const f = st.fwd.clone().normalize(), x = v3().crossVectors(UP, f).normalize(), y = v3().crossVectors(f, x);
+    const q = new T.Quaternion().setFromRotationMatrix(new T.Matrix4().makeBasis(x, y, f)).multiply(new T.Quaternion().setFromEuler(new T.Euler(st.pitch, 0, st.roll)));
+    group.position.copy(st.pos); group.quaternion.copy(q);
+    const pop = st.visible ? .3 + .7 * (1 - Math.pow(1 - st.appear, 3)) + .1 * Math.sin(st.appear * Math.PI) : st.appear;
+    model.scale.setScalar(s * Math.max(.001, pop));
+    const sk = stroke(st.phase), amp = cl(st.flapAmp, 0, 1.2);
+    wings.forEach(W => poseBones(W, st.open, sk, amp, st.glide, st.flare));
+    const bob = -sk.elev * .55 * amp * st.open; torsoG.position.y = bob;
+    const perched = st.mode === 'perch';
+    legs.forEach(l => { const len = perched ? 2.4 - st.crouch / Math.max(s, .01) * .7 : mix(1.1, 2.6, st.flare);
+      l.shin.scale.y = len; l.shin.position.y = -len / 2; l.foot.position.y = -len; l.g.rotation.x = perched ? .05 : mix(1.35, -.5, st.flare);
+      l.foot.children.forEach(toe => { toe.rotation.x = perched ? .25 : mix(.9, -.1, st.flare); }); });
+    lids.forEach(l => l.visible = st.blink > 0);
+    // head stabilization + saccades
+    group.updateMatrixWorld(true);
+    const restW = model.localToWorld(headRest.clone());
+    if (!st.headW || !perched) { st.headW = restW.clone(); st.headV.set(0, 0, 0); }
+    else if (dt > 0) { const w = 7; st.headV.addScaledVector(restW.clone().sub(st.headW).multiplyScalar(w * w), dt).addScaledVector(st.headV, -2 * w * dt); st.headW.addScaledVector(st.headV, dt);
+      const off = st.headW.clone().sub(restW), lim = 2.8 * s; if (off.length() > lim) { off.setLength(lim); st.headW.copy(restW).add(off); } }
+    const local = model.worldToLocal(st.headW.clone());
+    const pre = st.preen > 0 ? Math.sin((1.8 - st.preen) / 1.8 * Math.PI) : 0;
+    head.position.copy(local).add(v3(pre * 1.4, -pre * 2.2, -pre * 3.2));
+    head.rotation.set(st.hp + pre * .6 + (st.mode !== 'perch' ? -st.pitch * .8 : 0), st.hy + pre * 1.9, st.hr);
+    // crest: a heavily damped spring that lags behind head motion, then settles
+    if (dt > 0) {
+      const hv = (st.hy - (st.lastHy ?? st.hy)) / dt, pv = (st.hp - (st.lastHp ?? st.hp)) / dt; st.lastHy = st.hy; st.lastHp = st.hp;
+      const tx = cl(-pv * .05 + (st.mode !== 'perch' ? .25 : 0) + st.pitch * .3, -.35, .45), tz = cl(-hv * .04, -.3, .3), w = 9;
+      st.cxv = (st.cxv || 0) + (w * w * (tx - (st.cx || 0)) - 2 * w * (st.cxv || 0)) * dt; st.cx = (st.cx || 0) + st.cxv * dt;
+      st.czv = (st.czv || 0) + (w * w * (tz - (st.cz || 0)) - 2 * w * (st.czv || 0)) * dt; st.cz = (st.cz || 0) + st.czv * dt;
+    }
+    crestG.rotation.set(st.cx || 0, 0, st.cz || 0);
+    group.updateMatrixWorld(true);
+    if (EXT.ready) updateExt(dt); else if (!PIXEL) {
+    buildSkin(bob);
+    const twist = sk.twist * amp * st.open;
+    wings.forEach(W => buildWing(W, twist));
+    tailFan.rotation.x = -.18 + st.flare * .5;
+    buildFan(mix(.16, .6, st.fan), perched ? 1 : .3); }
+    aura.material.opacity = .08 * st.appear;
+    // tail plumes: stiff shafts with shape memory and heavy damping (calm, no whipping)
+    const steps = 2, h = dt / steps, g = 360 * CONFIG.gravity, upB = y.clone();
+    plumes.forEach((pl, pi) => {
+      if (EXT.ready && !CONFIG.phoenixExtraPlumes) return;
+      // pixel style: the plumes start at the end of the DRAWN tail (in the camera's plane) and hang in a gentle curve
+      const pxR = PIXEL ? v3(1, 0, 0).applyQuaternion(camera.quaternion) : null, pxU = PIXEL ? v3(0, 1, 0).applyQuaternion(camera.quaternion) : null, Lc = 14 * s;
+      const seg = 2.6 * s * pl.len * (PIXEL ? .5 : 1);
+      const a = PIXEL ? st.pos.clone().addScaledVector(pxR, -PX.dir * .86 * Lc).addScaledVector(pxU, (-.04 + (pl.i - 1) * .04) * Lc)
+                      : model.localToWorld((EXT.ready ? EXT.tailLocal.clone().add(v3(pl.off.x, pl.off.y, 0)) : pl.off.clone()).add(v3(0, bob, 0)));
+      const restAt = i => { if (!PIXEL) return model.localToWorld(pl.rest[i].clone().add(v3(0, bob, 0)));
+        const perchedP = st.mode === 'perch'; let p = a.clone();
+        for (let k = 1; k <= i; k++) { const u = k / (TN - 1), ang = (perchedP ? .45 + u * .9 : .12 + u * .3) + (pl.i - 1) * .12;
+          p.addScaledVector(pxR, -PX.dir * Math.cos(ang) * seg).addScaledVector(pxU, -Math.sin(ang) * seg); } return p; };
+      if (pl.p.length !== TN) { pl.p = []; pl.q = []; const back = f.clone().negate(); for (let i = 0; i < TN; i++) { const p = a.clone().addScaledVector(back, seg * i).add(v3(0, -seg * i * .25, 0)); pl.p.push(p); pl.q.push(p.clone()); } }
+      if (!pl.rest) { pl.rest = [EXT.ready ? EXT.tailLocal.clone().add(v3(pl.off.x, pl.off.y, 0)) : pl.off.clone()]; const L = 2.6 * pl.len;
+        for (let i = 1; i < TN; i++) { const u = i / (TN - 1), dn = .22 + .5 * u, sx = Math.sign(pl.off.x) * .18 * u;
+          pl.rest.push(pl.rest[i - 1].clone().addScaledVector(v3(sx, -dn, -1).normalize(), L)); } }
+      if (dt > 0) for (let k = 0; k < steps; k++) {
+        for (let i = 1; i < TN; i++) { const p = pl.p[i], o = pl.q[i], vel = p.clone().sub(o).multiplyScalar(.72);
+          const vmax = seg * .5; if (vel.length() > vmax) vel.setLength(vmax);
+          o.copy(p); p.add(vel).add(v3(Math.sin(t * 1.4 + i * .4 + pi * 1.7) * 2 * s * (i / TN) * h * h, -g * .4 * h * h, 0)); }
+        pl.p[0].copy(a);
+        for (let i = 1; i < TN; i++) { const u = i / (TN - 1); pl.p[i].lerp(restAt(i), .16 - .1 * u); }
+        for (let it = 0; it < 3; it++) for (let i = 1; i < TN; i++) { const d = pl.p[i].clone().sub(pl.p[i - 1]), L = d.length() || 1; pl.p[i].copy(pl.p[i - 1]).addScaledVector(d, seg / L); }
+      }
+      const arr = pl.m.geometry.attributes.position.array;
+      for (let i = 0; i < TN; i++) {
+        const p = pl.p[i], aa = pl.p[Math.max(0, i - 1)], bb = pl.p[Math.min(TN - 1, i + 1)], dir = bb.clone().sub(aa).normalize();
+        let side = v3().crossVectors(dir, upB); if (side.lengthSq() < 1e-4) side.set(1, 0, 0); side.normalize();
+        const u = i / (TN - 1), w = (u < .74 ? .75 + .35 * (1 - u) : .75 + Math.sin((u - .74) / .26 * Math.PI) * 1.5) * s;
+        arr.set([p.x + side.x * w, p.y + side.y * w, p.z + side.z * w, p.x - side.x * w, p.y - side.y * w, p.z - side.z * w], i * 6);
+      }
+      pl.m.geometry.attributes.position.needsUpdate = true; pl.m.geometry.computeVertexNormals(); pl.m.geometry.computeBoundingSphere();
+    });
+    pxRender(t, dt, vis);
+  }
+
+  /* =========================== PIXEL-ART PHOENIX ===========================
+     The bird is drawn as crisp GACA pixel art onto a small canvas every frame (full frame rate), and that
+     canvas is a camera-facing cutout inside the 3D scene, so the hat hides it or covers it pixel by pixel. */
+  const PX = { N: 448, fx: [], dir: 1, sx: 1, sxv: 0, pk: 1, tb: 0, tbv: 0, lastVy: 0, neck: 0, legs: 1 };
+  const PC = { f: '#DF41CF', ft: '#EFA0E7', a: '#FFCE00', at: '#FFE67F', t: '#56E2E1', tt: '#B3F2F1', l: '#C1BFFF', am: '#512EAB', ink: '#0D004D' };
+  const PSH = { f: '#A92A9C', a: '#D99A00', t: '#2FB0AF', am: '#3B1F82', ft: '#C873BF' };
+  const PAL = [PC.ink, PC.am, PSH.am, PC.f, PSH.f, PC.ft, PC.a, PSH.a, PC.at, PC.t, PSH.t, PC.tt, PC.l, '#FFFFFF'].map(h => { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; });
+  if (PIXEL) {
+    PX.cv = document.createElement('canvas'); PX.cv.width = PX.cv.height = PX.N; PX.ctx = PX.cv.getContext('2d', { willReadFrequently: true });
+    PX.tex = new T.CanvasTexture(PX.cv); PX.tex.magFilter = PX.tex.minFilter = T.NearestFilter; PX.tex.generateMipmaps = false; PX.tex.encoding = T.sRGBEncoding;
+    PX.mesh = new T.Mesh(new T.PlaneGeometry(1, 1), new T.MeshBasicMaterial({ map: PX.tex, transparent: true, alphaTest: .5, toneMapped: false, side: T.DoubleSide }));
+    PX.mesh.frustumCulled = false; PX.mesh.visible = false; PX.mesh.renderOrder = 2; scene.add(PX.mesh);
+  }
+  function pxEmit(at, vel, w, life, kind) {
+    PX.fx.push({ p: at.clone(), v: vel.clone(), age: 0, life, kind, wob: Math.random() * 6, w,
+      col: kind === 'flame' ? (Math.random() < .55 ? PC.a : PC.f) : [PC.a, PC.t, PC.f, PC.at, '#FFFFFF'][Math.random() * 5 | 0] });
+    if (PX.fx.length > 320) PX.fx.shift();
+  }
+  // ----- 2D drawing helpers (texel space) -----
+  const hexA = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; };
+  function capsule(c, x, y, ang, len, wid) { c.save(); c.translate(x, y); c.rotate(ang); c.beginPath(); c.moveTo(0, -wid / 2); c.lineTo(len - wid / 2, -wid / 2);
+    c.arc(len - wid / 2, 0, wid / 2, -Math.PI / 2, Math.PI / 2); c.lineTo(0, wid / 2); c.closePath(); c.restore(); }
+  function flamePath(c, x, y, ang, len, wid) { c.save(); c.translate(x, y); c.rotate(ang); c.beginPath(); c.moveTo(len, 0);
+    c.bezierCurveTo(len * .55, -wid * .2, len * .1, -wid * .65, 0, -wid * .2); c.quadraticCurveTo(-wid * .35, 0, 0, wid * .2);
+    c.bezierCurveTo(len * .1, wid * .65, len * .55, wid * .2, len, 0); c.closePath(); c.restore(); }
+  function inked(c, ow, fill) { c.lineJoin = 'round'; c.lineWidth = ow * 2; c.strokeStyle = PC.ink; c.stroke(); c.fillStyle = fill; c.fill(); }
+  function pfeather(c, x, y, ang, len, wid, base, tip, ow, tf = .32) {
+    capsule(c, x, y, ang, len, wid); inked(c, ow, base);
+    c.save(); capsule(c, x, y, ang, len, wid); c.clip(); c.translate(x, y); c.rotate(ang); c.fillStyle = tip; c.fillRect(len * (1 - tf), -wid, len, wid * 2); c.restore();
+  }
+  function pwing(c, b, L, far, ow) {
+    const f = Math.sin(b.flap) * b.flapAmp, open = 1 - b.fold, base = mix(-2.95, -2.05 + f * 1.05, open) + (far ? -.16 : 0), spread = mix(.05, .19, open);
+    const sx = far ? 0 : L * .05, sy = -L * .12, col = (a, d) => far ? d : a;
+    for (let i = 4; i >= 0; i--) pfeather(c, sx, sy, base + spread * (i - 2) * 1.1, L * (1.08 - Math.abs(i - 2) * .08) * mix(.82, 1, open), L * .22, col(PC.a, PSH.a), col(PC.t, PSH.t), ow);
+    for (let i = 3; i >= 0; i--) pfeather(c, sx, sy, base + .32 + spread * (i - 1.5) * .8, L * (.72 - i * .03) * mix(.85, 1, open), L * .22, col(PC.f, PSH.f), col(PC.a, PSH.a), ow, .28);
+    for (let i = 2; i >= 0; i--) pfeather(c, sx, sy, base + .55 + (i - 1) * .14, L * .42, L * .26, col(PC.ft, PSH.ft), col(PC.f, PSH.f), ow, .35);
+  }
+  function pbird(c, b, t) {
+    const L = b.L, ow = 1.05;
+    b.ropes.forEach((r, ri) => {
+      const pts = r.p; if (pts.length < 2) return; const wB = L * (ri === 0 ? .14 : .11);
+      for (const pass of [0, 1]) for (let i = 1; i < pts.length; i++) { const u = i / (pts.length - 1), w = Math.max(1, wB * (1 - u * .6));
+        c.lineCap = 'round'; c.strokeStyle = pass ? (u < .55 ? r.col[0] : r.col[1]) : PC.ink; c.lineWidth = pass ? w : w + ow * 2;
+        c.beginPath(); c.moveTo(pts[i - 1].x, pts[i - 1].y); c.lineTo(pts[i].x, pts[i].y); c.stroke(); }
+      const e = pts[pts.length - 1], q = pts[pts.length - 2], ang = Math.atan2(e.y - q.y, e.x - q.x), fl = L * (.36 + .05 * Math.sin(t * 9 + ri));
+      flamePath(c, e.x, e.y, ang, fl, L * .26); inked(c, ow, PC.f); flamePath(c, e.x, e.y, ang, fl * .65, L * .15); c.fillStyle = PC.a; c.fill();
+    });
+    c.save(); c.translate(b.x, b.y); c.scale(b.dir, 1); c.rotate(b.pitch);
+    if (b.fold < .95) pwing(c, b, L, true, ow);
+    if (b.perched) { const legEnd = L * .45 - b.crouch; c.lineCap = 'round';
+      for (const lx of [-.06, .1]) for (const pass of [0, 1]) { c.strokeStyle = pass ? PC.a : PC.ink; c.lineWidth = pass ? Math.max(1, L * .05) : Math.max(1, L * .05) + ow * 2;
+        c.beginPath(); c.moveTo(L * lx, L * .18); c.lineTo(L * (lx + .02), legEnd); c.lineTo(L * (lx + .1), legEnd); c.stroke(); } }
+    const hc = Math.cos(-b.pitch), hs = Math.sin(-b.pitch), ox = b.hox * b.dir, oy = b.hoy, pre = b.preen > 0 ? Math.sin((1.8 - b.preen) / 1.8 * Math.PI) : 0;
+    const hx = L * .44 + ox * hc - oy * hs - pre * L * .25, hy = -L * .3 + ox * hs + oy * hc + pre * L * .12;
+    for (let k = 2; k >= 0; k--) { const a = -2.2 - k * .35 + Math.sin(t * 8 + k * 1.9) * .1 + b.tilt * .4, fl = L * (.42 - k * .06) * (1 + .08 * Math.sin(t * 11 + k));
+      flamePath(c, hx - L * .04, hy - L * .14, a, fl, L * .2); inked(c, ow, PC.a); flamePath(c, hx - L * .04, hy - L * .14, a, fl * .6, L * .11); c.fillStyle = PC.at; c.fill(); }
+    const parts = [
+      () => { c.beginPath(); c.moveTo(-L * .3, -L * .2); c.lineTo(-L * .92, -L * .14); c.lineTo(-L * .92, L * .04); c.lineTo(-L * .3, L * .22); c.closePath(); },
+      () => { c.beginPath(); c.ellipse(0, L * .03, L * .53, L * .34, -.1, 0, Math.PI * 2); },
+      () => { c.beginPath(); c.moveTo(L * .2, -L * .2); c.quadraticCurveTo((L * .25 + hx) / 2, (hy - L * .25) / 2 - L * .05, hx - L * .05, hy - L * .12); c.lineTo(hx + L * .05, hy + L * .12); c.quadraticCurveTo(L * .45, L * .05, L * .3, L * .15); c.closePath(); },
+      () => { c.beginPath(); c.arc(hx, hy, L * .22, 0, Math.PI * 2); } ];
+    c.lineJoin = 'round'; c.lineWidth = ow * 2; c.strokeStyle = PC.ink; parts.forEach(p => { p(); c.stroke(); }); c.fillStyle = PC.f; parts.forEach(p => { p(); c.fill(); });
+    c.save(); parts[1](); c.clip();
+    c.fillStyle = PSH.f; c.beginPath(); c.ellipse(-L * .12, L * .2, L * .55, L * .24, -.1, 0, 7); c.fill();
+    c.fillStyle = PC.a; c.beginPath(); c.ellipse(L * .2, L * .12, L * .3, L * .19, -.2, 0, 7); c.fill();
+    c.fillStyle = PC.at; c.beginPath(); c.ellipse(L * .26, L * .06, L * .14, L * .07, -.3, 0, 7); c.fill(); c.restore();
+    c.strokeStyle = PC.ft; c.lineWidth = Math.max(1, L * .05); c.lineCap = 'round'; c.beginPath(); c.ellipse(-L * .02, -L * .02, L * .38, L * .22, -.1, Math.PI * 1.15, Math.PI * 1.55); c.stroke();
+    pwing(c, b, L, false, ow);
+    c.beginPath(); c.moveTo(hx + L * .16, hy - L * .05); c.quadraticCurveTo(hx + L * .4, hy - L * .02, hx + L * .36, hy + L * .1); c.quadraticCurveTo(hx + L * .3, hy + L * .04, hx + L * .17, hy + L * .07); c.closePath(); inked(c, ow, PC.a);
+    if (b.blink > 0) { c.strokeStyle = PC.ink; c.lineWidth = 1.5; c.beginPath(); c.moveTo(hx + L * .01, hy - L * .04); c.lineTo(hx + L * .14, hy - L * .04); c.stroke(); }
+    else { c.beginPath(); c.ellipse(hx + L * .07, hy - L * .04, L * .085, L * .1, 0, 0, 7); inked(c, ow * .6, '#FFFFFF');
+      c.fillStyle = PC.ink; c.beginPath(); c.ellipse(hx + L * .1, hy - L * .03, L * .05, L * .065, 0, 0, 7); c.fill(); }
+    c.restore();
+  }
+  // ----- per frame: map the 3D bird onto the pixel canvas -----
+  const camR = v3(), camU = v3();
+  function pxRender(t, dt, vis) {
+    if (!PIXEL) return;
+    const s = sc(), N = PX.N, c = PX.ctx;
+    // effects
+    for (const f of PX.fx) { f.age += dt; f.p.addScaledVector(f.v, dt); f.v.multiplyScalar(Math.exp(-1.6 * dt)); if (f.kind === 'flame') f.v.y += 30 * s * dt; }
+    PX.fx = PX.fx.filter(f => f.age < f.life);
+    const showFx = PX.fx.length && (!LAYER || IS_FRONT);
+    PX.mesh.visible = !!(vis || showFx); if (!PX.mesh.visible) return;
+    camera.updateMatrixWorld(); camR.set(1, 0, 0).applyQuaternion(camera.quaternion); camU.set(0, 1, 0).applyQuaternion(camera.quaternion);
+    const dist = Math.max(10, camera.position.distanceTo(st.pos)), Hs = renderer.domElement.height || 1080;
+    const pxPerCm = Hs / (2 * dist * Math.tan(T.MathUtils.degToRad(camera.fov / 2)));
+    const texelCm = CONFIG.phoenixPixelSize * (Hs / 1080) / pxPerCm;
+    const toT = p => { const d = p.clone().sub(st.pos); return { x: N / 2 + d.dot(camR) / texelCm, y: N / 2 - d.dot(camU) / texelCm }; };
+    // if frames are running slow, redraw the pixel art every other frame (it still moves smoothly through the scene)
+    PX.ema = PX.ema === undefined ? .016 : PX.ema + ((dt || .016) - PX.ema) * .05;
+    if (PX.drawn && PX.ema > .024 && (PX.skip = !PX.skip)) {
+      PX.mesh.position.copy(st.pos); if (st.mode === 'perch') PX.mesh.position.addScaledVector(camera.position.clone().sub(st.pos).normalize(), 12 * s);
+      PX.mesh.quaternion.copy(camera.quaternion); PX.mesh.scale.setScalar(N * texelCm); return;
+    }
+    PX.drawn = true;
+    c.clearRect(0, 0, N, N);
+    if (vis) {
+      const fx = st.fwd.dot(camR), fy = -st.fwd.dot(camU), perched = st.mode === 'perch';
+      if (perched) { const toHead = headPos.clone().sub(st.pos).dot(camR); if (Math.abs(toHead) > 1) PX.dir = Math.sign(toHead); }   // perched: faces your head, tail off the outside of your shoulder
+      else if (Math.abs(fx) > .15) PX.dir = Math.sign(fx);
+      let hox = 0, hoy = 0;
+      if (st.headW) { group.updateMatrixWorld(true); const off = st.headW.clone().sub(model.localToWorld(headRest.clone())); hox = off.dot(camR) / texelCm; hoy = -off.dot(camU) / texelCm; }
+      const pop = st.visible ? .3 + .7 * (1 - Math.pow(1 - st.appear, 3)) + .1 * Math.sin(st.appear * Math.PI) : st.appear;
+      const B = 16 * s / texelCm, ez = k => 1 - Math.exp(-dt * k);
+      PX.pk += ((perched ? 1 : 0) - PX.pk) * ez(perched ? 4 : 6);                                      // perch ↔ flight blend
+      PX.neck += ((perched ? 0 : 1 - st.flare * .6) - PX.neck) * ez(5);
+      PX.legs += ((perched ? 1 : st.flare) - PX.legs) * ez(7);
+      if (dt > 0) { PX.sxv += (180 * (PX.dir - PX.sx) - 2 * .85 * Math.sqrt(180) * PX.sxv) * dt; PX.sx = cl(PX.sx + PX.sxv * dt, -1, 1); }   // turning
+      // wingbeat from the flap clock: strong downstroke, flexed upstroke; glides hold the wings slightly raised
+      const sk = stroke(st.phase), amp = cl(st.flapAmp, 0, 1.15), gl = st.glide || 0;
+      const elev = (sk.elev * amp) * (1 - gl) + gl * .18, flex = sk.flex * amp * (1 - gl);
+      // tail: a heavily damped spring that lags behind up/down motion, plus a gentle ripple in flight
+      const vy = -st.vel.dot(camU), ay = dt > 0 ? (vy - PX.lastVy) / dt : 0; PX.lastVy = vy;
+      if (dt > 0) { const tgt = cl(ay / (900 * s), -.25, .25) - (perched ? 0 : sk.elev * amp * .05); PX.tbv += (40 * (tgt - PX.tb) - 2 * .9 * Math.sqrt(40) * PX.tbv) * dt; PX.tb += PX.tbv * dt; }
+      const bends = Array.from({ length: 9 }, (_, i) => PX.tb * .1 + Math.sin(t * 2.6 - i * .7) * .018 * mix(1, .35, PX.pk));
+      // head: holds still in space (stabilization) and thrusts forward a little on each quick look
+      const bob = perched ? cl(Math.abs(st.hvy || 0) * .35, 0, 3) : 0;
+      const flightPitch = cl(Math.atan2(fy, Math.abs(fx) + .3), -.6, .6), perchPitch = st.pitch * .6 + .05;
+      const P = { B, t, perchK: PX.pk, amp, elev, flex, fold: 1 - st.open, sweep: st.flare, neck: PX.neck,
+        headDX: hox * Math.sign(PX.sx || 1) + bob, headDY: hoy, headTilt: (st.hr || 0) * .5 + (st.hp || 0) * .4, crestSway: (st.cx || 0) * 2,
+        tailBend: bends, tailFan: st.fan, tailDroop: (1 - PX.pk) * st.flare * .6, legs: PX.legs, legReach: (1 - PX.pk) * st.flare,
+        blink: st.blink, pitch: mix(flightPitch, perchPitch, PX.pk) - st.flare * .7 * (1 - PX.pk) };
+      const sx = Math.sign(PX.sx || 1) * Math.max(.12, Math.abs(PX.sx));
+      c.save(); c.translate(N / 2, N / 2); c.scale(sx * pop, pop); PXB.draw(c, P); c.restore();
+    }
+    for (const f of PX.fx) { const q = toT(f.p), k = 1 - f.age / f.life;
+      if (f.kind === 'flame') { const r = Math.max(1.5, f.w / texelCm * (.55 + .45 * Math.sin(k * Math.PI))); flamePath(c, q.x, q.y + r * .6, -Math.PI / 2 + Math.sin(f.age * 9 + f.wob) * .25, r * 2.2, r * 1.4);
+        c.fillStyle = f.col; c.fill(); flamePath(c, q.x, q.y + r * .45, -Math.PI / 2, r * 1.2, r * .7); c.fillStyle = PC.at; c.fill(); }
+      else { c.fillStyle = f.col; const sz = f.kind === 'spark' ? 2 : 1; c.fillRect(Math.round(q.x), Math.round(q.y), sz, sz); } }
+    PXB.finish(c, N, N);
+    PX.tex.needsUpdate = true;
+
+    PX.mesh.position.copy(st.pos); if (st.mode === 'perch') PX.mesh.position.addScaledVector(camera.position.clone().sub(st.pos).normalize(), 12 * s);   // perched: sits just in front of your shoulder
+    PX.mesh.quaternion.copy(camera.quaternion); PX.mesh.scale.setScalar(N * texelCm);
+  }
+
+  /* =========================== SYNC =========================== */
+  const KEYS = ['visible', 'appear', 'mode', 'depth', 'pitch', 'roll', 'open', 'phase', 'flapAmp', 'crouch', 'preen', 'blink', 'dip', 'spot', 'flare', 'fan', 'glide', 'hy', 'hp', 'hr', 'breath', 'shuffle', 'ruffle'];
+  function exportState() {
+    const o = {}; KEYS.forEach(k => o[k] = st[k]);
+    o.pos = st.pos.toArray(); o.fwd = st.fwd.toArray(); o.headW = st.headW ? st.headW.toArray() : null;
+    o.plumes = plumes.map(p => p.p.map(v => [v.x, v.y, v.z])); o.shL = shoulderL && shoulderL.toArray(); o.shR = shoulderR && shoulderR.toArray(); return o;
+  }
+  function importState(o, t) {
+    if (!o) return; KEYS.forEach(k => { if (k in o) st[k] = o[k]; });
+    st.pos.fromArray(o.pos); st.fwd.fromArray(o.fwd); st.headW = o.headW ? v3().fromArray(o.headW) : null;
+    plumes.forEach((p, i) => { p.p = (o.plumes[i] || []).map(a => v3(a[0], a[1], a[2])); p.q = p.p.map(v => v.clone()); });
+    shoulderL = o.shL ? v3().fromArray(o.shL) : null; shoulderR = o.shR ? v3().fromArray(o.shR) : null;
+    const b = brimPerch().local.clone().setY(0).normalize(), ax = v3().crossVectors(UP, b).normalize(); brimQ.setFromAxisAngle(ax.lengthSq() ? ax : X1, st.dip * (st.visible ? st.appear : 0));
+    pose(t, 0);
+  }
+  return { setHands: H => { hands = H; }, ON, update, toggle, takeOff, land, setShoulders: (L, R) => { shoulderL = L; shoulderR = R; }, exportState, importState, brimQ, st, hide: () => { group.visible = false; if (PX.mesh) PX.mesh.visible = false; plumes.forEach(p => p.m.visible = false); }, get shoulders() { return [shoulderL, shoulderR]; } };
+})(); } catch (e) { console.warn('[phoenix] could not start; the hat runs without it.', e); phOK = false; return PH_STUB; } })();
+
+/* ---------- snap detection: hand motion + the snap's "click" ---------- */
+const SNAP = { hands: {}, lastClick: -1e9, lastSnap: -1e9, armedAt: -1e9, an: null, buf: null, avg: .002, handLm: null, poseLm: null };
+function snapFired(now, why) { if (now - SNAP.lastSnap < 1200) return; SNAP.lastSnap = now; PH.toggle(); console.log('[phoenix] snap', why); }
+function snapHands(res, now) {
+  const lms = (res && res.landmarks) || [], vw = video.videoWidth || 16, vh = video.videoHeight || 9;
+  lms.forEach((lm, i) => {
+    const P = j => ({ x: lm[j].x * vw, y: lm[j].y * vh }), d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const scale = d(P(0), P(9)) || 1, tm = d(P(4), P(12)) / scale;
+    const palm = [0, 5, 9, 13, 17].reduce((a, j) => ({ x: a.x + P(j).x / 5, y: a.y + P(j).y / 5 }), { x: 0, y: 0 });
+    const S = SNAP.hands[i] || (SNAP.hands[i] = { n: 0, prev: null });
+    const mid = P(12), sp = S.prev ? d(mid, S.prev) / scale : 0; S.prev = mid;
+    if (tm < .32) { S.n++; if (S.n >= 2) SNAP.armedAt = now; }
+    else { if (S.n >= 2 && sp > .35 && d(mid, palm) / scale < .95) snapFired(now, 'motion'); S.n = 0; }
+  });
+  if (now - SNAP.lastClick < 300 && now - SNAP.armedAt < 650) snapFired(now, 'sound');
+}
+async function snapListen() {
+  try {
+    const st = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false });
+    const ac = new (window.AudioContext || window.webkitAudioContext)(), an = ac.createAnalyser(); an.fftSize = 512; ac.createMediaStreamSource(st).connect(an);
+    SNAP.an = an; SNAP.buf = new Float32Array(an.fftSize); if (ac.state === 'suspended') ac.resume();
+  } catch (e) { console.warn('[phoenix] no mic; snaps by hand motion only'); }
+}
+function snapAudio(now) {
+  if (!SNAP.an) return; SNAP.an.getFloatTimeDomainData(SNAP.buf);
+  let hf = 0; for (let i = 1; i < SNAP.buf.length; i++) hf = Math.max(hf, Math.abs(SNAP.buf[i] - SNAP.buf[i - 1]));
+  if (hf > SNAP.avg * 7 / CONFIG.snapLoudness && hf > .05 / CONFIG.snapLoudness) SNAP.lastClick = now;
+  SNAP.avg += (hf - SNAP.avg) * .02;
+}
+
+/* =====================================================================
    LAYOUT + LOOP
    ===================================================================== */
 function layout() {
@@ -1114,7 +2330,7 @@ function frame(now) {
     hatRoot.visible = appear > .01; hatRoot.position.copy(anchor); hatRoot.scale.setScalar(Math.max(.001, appear));
     if (F.ca && F.c) { camera.aspect = F.c; camera.updateProjectionMatrix(); }
     if (F.bs && F.bs !== CONFIG.brimSize) { CONFIG.brimSize = F.bs; buildBrim(); }
-    updateMeshes(t); points.visible = false;
+    phSafe(() => PH.importState(F.ph, t)); updateMeshes(t); points.visible = false;
     placeLights(); renderer.render(scene, camera);
     return;
   }
@@ -1143,12 +2359,15 @@ function frame(now) {
     charm.tipPrev = tipNow;
     hatRoot.position.copy(anchor); hatRoot.scale.setScalar(Math.max(.001, appear));
     updateMeshes(t);
+    if (DEMO && torso) { torso.updateMatrixWorld(true); phSafe(() => PH.setShoulders(torso.localToWorld(v3(11.5, -14.4, -1.2)), torso.localToWorld(v3(-11.5, -14.4, -1.2)))); }
+    if (!DEMO) snapAudio(now);
+    phSafe(() => PH.update(dt, t));
   }
   if (IS_BACK) { points.visible = false; puffs.forEach(p => p.sp.visible = false); } else { updateSparkles(dt, t); updatePuffs(dt); }
   placeLights(); renderer.render(scene, camera); penRender(dt);
   if (sync && !IS_BACK && !DEMO && poseOk) {
     const flat = new Float32Array(N * 3); pts.forEach((p, i) => p.toArray(flat, i * 3));
-    try { sync.postMessage({ a: anchor.toArray(), hq: headQuat.toArray(), q: hatQuat.toArray(), hp: headPos.toArray(), s: autoScale, ap: appear, p: Array.from(flat), c: camera.aspect, ca: 1, bs: CONFIG.brimSize }); } catch (e) {}
+    try { sync.postMessage({ a: anchor.toArray(), hq: headQuat.toArray(), q: hatQuat.toArray(), hp: headPos.toArray(), s: autoScale, ap: appear, p: Array.from(flat), c: camera.aspect, ca: 1, bs: CONFIG.brimSize, ph: phOK ? phSafe(() => PH.exportState()) : null }); } catch (e) {}
   }
 }
 
@@ -1158,6 +2377,9 @@ if (DEMO) {
   $('bNod').onclick = () => { demo.action = 'nod'; demo.actionT = 0; demo.idle = 0; };
   $('bLook').onclick = () => { demo.action = 'look'; demo.actionT = 0; demo.idle = 0; };
   $('bPoof').onclick = () => toggleHat();
+  $('bSnap').onclick = () => PH.toggle();
+  $('bPFly').onclick = () => { if (!PH.st.visible) PH.toggle(); else PH.takeOff(); };
+  $('bPHat').onclick = () => { if (!PH.st.visible) PH.toggle(); PH.land('brim'); };
   $('bMore').onclick = () => { const p = $('panel'); p.classList.toggle('open'); $('bMore').setAttribute('aria-expanded', p.classList.contains('open')); };
   const bind = (id, fn) => $(id).addEventListener('input', e => fn(+e.target.value));
   bind('sView', v => demo.view = v); bind('sFlop', v => CONFIG.floppiness = v); bind('sDroop', v => CONFIG.droop = v);
@@ -1171,7 +2393,8 @@ if (DEMO) {
   setTimeout(() => { if (performance.now() - lastMsg > 2500) { console.warn('[hat] no front layer heard; tracking on my own'); startTracking(); } else setStatus('Back layer: following the front layer'); }, 3000);
 } else startTracking();
 
-window.__hat = { demo, CONFIG, get ok() { return poseOk; }, feed: (res, now) => processFace(res, now), get anchor() { return anchor.toArray(); }, get scale() { return autoScale; } };
+window.__ph = PH;
+window.__hat = { demo, CONFIG, get ok() { return poseOk; } };
 requestAnimationFrame(frame);
 })();
 </script>
