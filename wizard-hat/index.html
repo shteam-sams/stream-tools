@@ -13,10 +13,10 @@ const CONFIG = {
   cameraName: "OBS Virtual Camera",   // part of the camera's name is enough
   mirror: false,                      // true if you flipped your camera horizontally in OBS
   camRect: { x: 0, y: 0, w: 1920, h: 1080 },   // where your camera sits on the 1920x1080 canvas
-  smoothing: 0.45,                    // 0..0.9, higher = steadier but laggier
-  sitHeight: 0,                       // nudge the hat up (+) or down (-), in cm
-  sitDepth: 0,                        // nudge the hat back (-) or forward (+), in cm
-  fitSize: 1.0,                       // fine-tune the auto size (1 = matched to your face)
+  smoothing: 0.75,                    // 0..0.9, higher = steadier but laggier
+  sitHeight: 1,                       // nudge the hat up (+) or down (-), in cm
+  sitDepth: -1,                        // nudge the hat back (-) or forward (+), in cm
+  fitSize: 1.1,                       // fine-tune the auto size (1 = matched to your face)
   hideBrimBehindHead: false,          // true = an invisible head shape hides the brim behind your head (can cut the hat if the fit is off)
 
   // ---- look (GACA palette) ----
@@ -24,7 +24,7 @@ const CONFIG = {
   bandColor: "#56E2E1",               // Turquoise
   patchColors: ["#FFCE00", "#DF41CF", "#56E2E1", "#C1BFFF"],   // Amber, Fuchsia, Turquoise, Light Purple
   hatScale: 1.0,
-  hatHeight: 1.0,
+  hatHeight: 1.3,
   droop: 1.0,                         // how far the tip bends over (0 = straight up)
   droopSide: -1,                      // -1 = tip falls to the hat's left, 1 = right
   charm: true,                        // little brass star hanging from the tip
@@ -47,7 +47,7 @@ const CONFIG = {
   // ---- wizard beard: stroke your chin to grow it in, stroke again to retract it ----
   beard: true,
   beardStartOn: false,
-  beardLength: 1.0,                   // 1 = reaches about mid-chest; try 1.3 for an extra-long wizard beard
+  beardLength: 1.3,                   // 1 = reaches about mid-chest; try 1.3 for an extra-long wizard beard
 
   // ---- phoenix familiar (lives in the same 3D scene as the hat) ----
   phoenix: true,
